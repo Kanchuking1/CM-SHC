@@ -7,4 +7,4 @@ experiment_name: dcmh_flickr8k_128bit
 # Optional overrides (merged last)
 training:
   max_epochs: 120
-  batch_size: 32
+  batch_size: 64
