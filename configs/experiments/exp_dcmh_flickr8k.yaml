@@ -1,0 +1,10 @@
+# Compose via src.pipelines.train (merges base + this model + this dataset + overrides).
+model: dcmh
+dataset: flickr8k
+
+experiment_name: dcmh_flickr8k_128bit
+
+# Optional overrides (merged last)
+training:
+  max_epochs: 500
+  batch_size: 32

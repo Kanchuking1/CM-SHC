@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cm-shc"
+version = "0.1.0"
+description = "Cross-modal semantic hashing research codebase"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "transformers>=4.30.0",
+  "tokenizers>=0.13.0",
+  "sentencepiece>=0.1.99",
+  "omegaconf>=2.3.0",
+  "tqdm>=4.65.0",
+  "numpy>=1.24.0",
+  "pandas>=2.0.0",
+  "Pillow>=9.5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

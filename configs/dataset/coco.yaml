@@ -1,0 +1,6 @@
+dataset:
+  name: coco
+  root: data/raw/coco
+  # Extend src/data/loaders.py when wired
+  ann_file: null
+  image_root: null

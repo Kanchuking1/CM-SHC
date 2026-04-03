@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env.local
+
+# Data & experiment artifacts (keep layout via .gitkeep where needed)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/splits/*
+!data/splits/.gitkeep
+
+experiments/logs/*
+!experiments/logs/.gitkeep
+experiments/checkpoints/*
+!experiments/checkpoints/.gitkeep
+experiments/results/*
+!experiments/results/.gitkeep
+
+# Legacy flat checkpoint folder from older layout
+checkpoints/

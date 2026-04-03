@@ -1,0 +1,138 @@
+"""
+Train from merged YAML experiment config.
+
+Usage (from repository root)::
+
+    python -m src.pipelines.train --config configs/experiments/exp_dcmh_flickr8k.yaml
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import torch
+from omegaconf import OmegaConf
+from torch.utils.data import DataLoader
+
+from src.core.trainer import DCMHTrainer
+from src.data.collators import build_train_labels_tensor, load_hf_tokenizer, make_dcmh_collate_fn
+from src.data.loaders import get_dataset
+from src.data.transforms import imagenet_train_transform
+from src.models.hashing.dcmh import DCMH
+from src.utils.config import experiment_run_dir, load_experiment, repo_root
+from src.utils.logger import setup_logging
+from src.utils.seed import set_seed
+
+
+def _cfg_to_json_dict(cfg) -> dict:
+    return OmegaConf.to_container(cfg, resolve=True)
+
+
+def build_model(cfg):
+    if cfg.model.name != "dcmh":
+        raise ValueError(
+            f"Only model.name=dcmh is implemented in the pipeline; got {cfg.model.name!r}. "
+            "Implement CM-SHC or switch config."
+        )
+    tdim = cfg.model.text_feature_dim
+    if tdim is not None:
+        tdim = int(tdim)
+    return DCMH(
+        bit_dim=int(cfg.model.bit_dim),
+        text_model_name=str(cfg.model.backbone.text),
+        text_feature_dim=tdim,
+        freeze_text_encoder=bool(cfg.model.freeze_text_encoder),
+    )
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument(
+        "--config",
+        type=str,
+        default="configs/experiments/exp_dcmh_flickr8k.yaml",
+        help="Path to experiment YAML (merged with base, model, dataset).",
+    )
+    p.add_argument("--device", type=str, default=None, help="Override cfg.device (cuda/cpu)")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    cfg = load_experiment(args.config)
+
+    set_seed(int(cfg.seed))
+    device = args.device or str(cfg.device)
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        device = "cpu"
+
+    run_dir = experiment_run_dir(cfg)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_root = Path(cfg.output.root) / cfg.output.logs
+    log_root.mkdir(parents=True, exist_ok=True)
+    logger = setup_logging(log_dir=log_root)
+    logger.info("Experiment dir: %s", run_dir)
+
+    (run_dir / "run_config.json").write_text(
+        json.dumps(_cfg_to_json_dict(cfg), indent=2),
+        encoding="utf-8",
+    )
+
+    transform = imagenet_train_transform()
+    train_ds = get_dataset(
+        str(cfg.dataset.name),
+        root_dir=cfg.dataset.root,
+        transform=transform,
+        num_pseudo_classes=int(cfg.dataset.num_pseudo_classes),
+    )
+
+    tokenizer = load_hf_tokenizer(str(cfg.model.backbone.text))
+    collate = make_dcmh_collate_fn(tokenizer, max_length=int(cfg.dataset.caption_max_length))
+
+    loader = DataLoader(
+        train_ds,
+        batch_size=int(cfg.training.batch_size),
+        shuffle=True,
+        drop_last=True,
+        num_workers=int(cfg.training.num_workers),
+        collate_fn=collate,
+        pin_memory=device.startswith("cuda"),
+    )
+
+    train_labels = build_train_labels_tensor(train_ds, int(cfg.dataset.num_pseudo_classes))
+
+    model = build_model(cfg).to(device)
+    trainer = DCMHTrainer(
+        model=model,
+        train_loader=loader,
+        train_labels=train_labels,
+        device=device,
+        gamma=float(cfg.model.gamma),
+        eta=float(cfg.model.eta),
+        max_epoch=int(cfg.training.max_epochs),
+        lr_img=float(cfg.training.lr_img),
+        lr_txt=float(cfg.training.lr_txt),
+    )
+
+    meta = {
+        "experiment_name": str(cfg.experiment_name),
+        "model": str(cfg.model.name),
+        "dataset": str(cfg.dataset.name),
+        "image_backbone": str(cfg.model.backbone.image),
+        "text_backbone": str(cfg.model.backbone.text),
+        "bit_dim": int(cfg.model.bit_dim),
+        "config_path": str(Path(args.config).resolve()),
+        "repo_root": str(repo_root()),
+    }
+    trainer.train(
+        checkpoint_dir=run_dir,
+        save_every=int(cfg.training.save_every),
+        run_meta=meta,
+    )
+    print(f"Done. Checkpoints and run_config under: {run_dir}")
+
+
+if __name__ == "__main__":
+    main()

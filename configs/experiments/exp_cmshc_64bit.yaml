@@ -1,0 +1,9 @@
+# Future CM-SHF experiment; requires src.models.hashing.cm_shc implementation.
+model: cm_shc
+dataset: flickr8k
+
+experiment_name: cmshc_flickr8k_64bit
+
+training:
+  max_epochs: 100
+  batch_size: 32

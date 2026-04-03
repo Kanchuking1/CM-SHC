@@ -1,0 +1,18 @@
+# Shared defaults for all experiments (merge order: base → model → dataset → experiment).
+seed: 42
+device: cuda
+
+output:
+  root: experiments
+  checkpoints: checkpoints
+  logs: logs
+  results: results
+
+training:
+  batch_size: 32
+  num_workers: 4
+  save_every: 1
+  max_epochs: 500
+  # 10**(-1.5) ≈ 0.0316
+  lr_img: 0.0316
+  lr_txt: 0.0316

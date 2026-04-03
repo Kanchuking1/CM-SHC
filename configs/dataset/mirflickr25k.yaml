@@ -1,0 +1,5 @@
+dataset:
+  name: mirflickr25k
+  root: data/raw/mirflickr25k
+  # Extend src/data/loaders.py + preprocessing when wired
+  split_file: null

@@ -1,0 +1,7 @@
+# Placeholder for CM-SHC; swap experiment `model: cm_shc` when implemented.
+model:
+  name: cm_shc
+  bit_dim: 64
+  backbone:
+    image: resnet50
+    text: huawei-noah/TinyBERT_General_4L_312D

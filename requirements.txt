@@ -1,0 +1,14 @@
+# Install PyTorch for your platform/CUDA build first if needed: https://pytorch.org
+torch>=2.0.0
+torchvision>=0.15.0
+
+omegaconf>=2.3.0
+transformers>=4.30.0
+# Fast tokenizers: Rust runtime (often pulled in by transformers; pin for clarity)
+tokenizers>=0.13.0
+# Unigram / some conversions; PyPI name is ``sentencepiece`` (not ``sentence_piece``)
+sentencepiece>=0.1.99
+tqdm>=4.65.0
+numpy>=1.24.0
+pandas>=2.0.0
+Pillow>=9.5.0

@@ -1,0 +1,11 @@
+model:
+  name: dcmh
+  bit_dim: 128
+  gamma: 1.0
+  eta: 1.0
+  freeze_text_encoder: false
+  # null = use HF transformer backbone; set int for MLP-on-features baseline
+  text_feature_dim: null
+  backbone:
+    image: resnet50
+    text: huawei-noah/TinyBERT_General_4L_312D
