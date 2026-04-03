@@ -1,6 +1,6 @@
 dataset:
   name: Flickr8k
   # Path to folder containing Images/ and captions.txt (relative to repo root or absolute)
-  root: data/raw/flickr8k
+  root: ../../Datasets/Flickr8k
   num_pseudo_classes: 256
   caption_max_length: 64
