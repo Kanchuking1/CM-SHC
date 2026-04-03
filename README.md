@@ -22,6 +22,16 @@ bash scripts/train.sh
 
 Checkpoints and `run_config.json` are written under `experiments/checkpoints/<experiment_name>_.../`.
 
+### SLURM (e.g. TAMU Grace)
+
+From the repo root:
+
+```bash
+sbatch scripts/slurm/dcmh_flickr8k_128bit.sbatch
+```
+
+Edit `#SBATCH` lines in that file for your partition, wall time, and uncomment `module` / `conda` as needed.
+
 ## Dependencies
 
 - `pip install -r requirements.txt` (install PyTorch from [pytorch.org](https://pytorch.org) if needed)
