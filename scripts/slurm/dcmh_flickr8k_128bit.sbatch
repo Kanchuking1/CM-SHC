@@ -43,6 +43,9 @@ echo "Start: $(date -Is)"
 echo "Config: $CONFIG"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 
+echo "Downloading models"
+python -m src.pipelines.download_models --config "$CONFIG" "$@"
+echo "Models downloaded"
 python -m src.pipelines.train --config "$CONFIG" "$@"
 
 echo "End: $(date -Is)"
