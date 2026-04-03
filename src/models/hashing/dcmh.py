@@ -23,6 +23,7 @@ class DCMH(nn.Module):
         text_model_name: str,
         text_feature_dim: int | None = None,
         freeze_text_encoder: bool = False,
+        local_files_only: bool = False,
     ):
         super().__init__()
         self.bit_dim = bit_dim
@@ -41,6 +42,7 @@ class DCMH(nn.Module):
                 text_model_name,
                 bit_dim,
                 freeze=freeze_text_encoder,
+                local_files_only=local_files_only,
             )
             self.text_encoder = enc.encoder
             self.text_proj = enc.proj

@@ -51,6 +51,10 @@ def load_experiment(path: str | Path) -> Any:
     if out_root is not None and str(out_root) and not Path(str(out_root)).is_absolute():
         cfg.output.root = str((repo_root() / str(out_root)).resolve())
 
+    mc = OmegaConf.select(cfg, "paths.model_cache")
+    if mc is not None and str(mc) and not Path(str(mc)).is_absolute():
+        cfg.paths.model_cache = str((repo_root() / str(mc)).resolve())
+
     return cfg
 
 

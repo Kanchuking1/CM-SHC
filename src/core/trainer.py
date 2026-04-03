@@ -224,15 +224,31 @@ class DCMHTrainer:
             payload["meta"] = meta
         torch.save(payload, path)
 
+    def load_training_checkpoint(self, path: Path | str) -> int:
+        """Restore model, optimizers, and hash buffers. Returns next epoch index (0-based)."""
+        path = Path(path)
+        try:
+            ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError:
+            ckpt = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(ckpt["model_state_dict"])
+        self.optim_img.load_state_dict(ckpt["optim_img"])
+        self.optim_txt.load_state_dict(ckpt["optim_txt"])
+        self.F_buffer = ckpt["F_buffer"].to(self.device)
+        self.G_buffer = ckpt["G_buffer"].to(self.device)
+        self.B = ckpt["B"].to(self.device)
+        return int(ckpt["epoch"])
+
     def train(
         self,
         checkpoint_dir: Path | str | None = None,
         save_every: int = 1,
         run_meta: dict | None = None,
+        start_epoch: int = 0,
     ) -> None:
         checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         run_meta = dict(run_meta) if run_meta else {}
-        for epoch in range(self.max_epoch):
+        for epoch in range(start_epoch, self.max_epoch):
             m = self.train_epoch()
             full = self.full_objective_value()
             print(

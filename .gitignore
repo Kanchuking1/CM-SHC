@@ -23,3 +23,6 @@ experiments/results/*
 
 # Legacy flat checkpoint folder from older layout
 checkpoints/
+
+# Local pretrained snapshots (populate via src.pipelines.download_models)
+model_cache/

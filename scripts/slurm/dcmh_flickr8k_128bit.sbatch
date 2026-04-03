@@ -25,6 +25,10 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p experiments/logs experiments/checkpoints experiments/results
 
 export PYTHONUNBUFFERED=1
+# Offline Hub / torchvision: use project model_cache (submit from repo root)
+export TORCH_HOME="${SLURM_SUBMIT_DIR:-$PWD}/model_cache/torch"
+export CM_SHC_OFFLINE=1
+mkdir -p "$TORCH_HOME"
 
 # Optional: load modules / conda (uncomment and adjust for TAMU)
 # module purge

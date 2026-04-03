@@ -3,6 +3,7 @@ torch>=2.0.0
 torchvision>=0.15.0
 
 omegaconf>=2.3.0
+huggingface_hub>=0.20.0
 transformers>=4.30.0
 # Fast tokenizers: Rust runtime (often pulled in by transformers; pin for clarity)
 tokenizers>=0.13.0

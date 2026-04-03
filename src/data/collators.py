@@ -6,19 +6,19 @@ import torch
 from transformers import AutoTokenizer, BertTokenizer
 
 
-def load_hf_tokenizer(model_id: str):
+def load_hf_tokenizer(model_id: str, local_files_only: bool = False):
     """Prefer slow BertTokenizer when possible to avoid fast-tokenizer conversion issues."""
     attempts: list[tuple[str, BaseException]] = []
     try:
-        return BertTokenizer.from_pretrained(model_id)
+        return BertTokenizer.from_pretrained(model_id, local_files_only=local_files_only)
     except Exception as e:
         attempts.append(("BertTokenizer", e))
     try:
-        return AutoTokenizer.from_pretrained(model_id, use_fast=False)
+        return AutoTokenizer.from_pretrained(model_id, use_fast=False, local_files_only=local_files_only)
     except Exception as e:
         attempts.append(("AutoTokenizer(use_fast=False)", e))
     try:
-        return AutoTokenizer.from_pretrained(model_id)
+        return AutoTokenizer.from_pretrained(model_id, local_files_only=local_files_only)
     except Exception as e:
         attempts.append(("AutoTokenizer(fast)", e))
     lines = "\n".join(f"  - {n}: {x}" for n, x in attempts)
