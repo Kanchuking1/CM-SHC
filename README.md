@@ -6,6 +6,8 @@ Research codebase with separated **data / models / losses / training / indexing*
 
 See repository tree: `configs/` (experiments), `src/` (library), `data/` (not versioned), `experiments/` (logs, checkpoints, results), `scripts/`, `tests/`, `notebooks/`.
 
+For how configs merge, where models and data load, and a training flow diagram, see [docs/architecture.md](docs/architecture.md).
+
 ## Conda environment
 
 Requires **Python ≥ 3.10** (see `pyproject.toml`). From the repository root:
@@ -54,6 +56,38 @@ bash scripts/train.sh
 ```
 
 Checkpoints and `run_config.json` are written under `experiments/checkpoints/<experiment_name>_.../`.
+
+## Evaluation and retrieval
+
+Metrics assume a **paired** dataset: row `i` pairs one image with one caption (as in `Flickr8KDCMHDataset`). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
+
+**Evaluate** (Recall@K, MRR for image→text and text→image). Writes JSON under `experiments/results/` by default.
+
+```bash
+# Use the newest training checkpoint for this experiment config
+python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_flickr8k.yaml --latest
+
+# Or pass a checkpoint path explicitly
+python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_flickr8k.yaml \
+  --checkpoint experiments/checkpoints/<run_name>/epoch_0120.pt
+
+# Optional: batch size, K list, custom JSON path
+python -m src.pipelines.evaluate --config ... --latest --batch-size 64 --ks 1,5,10,100 --output my_metrics.json
+```
+
+Or: `bash scripts/eval.sh --config ... --latest`
+
+**Retrieve** (print top-K matches for one query index):
+
+```bash
+python -m src.pipelines.retrieve --config configs/experiments/exp_dcmh_flickr8k.yaml --latest \
+  --query-index 0 --top-k 5 --mode i2t
+
+# Text query ranking images
+python -m src.pipelines.retrieve --config ... --checkpoint path/to/epoch_0120.pt --query-index 3 --mode t2i
+```
+
+Use the same `model_cache` / offline setup as training if the cluster has no Hub access.
 
 ### Offline HPC (no internet on compute nodes)
 

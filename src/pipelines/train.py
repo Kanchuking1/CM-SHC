@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 
 import torch
@@ -23,6 +22,7 @@ from src.data.collators import build_train_labels_tensor, load_hf_tokenizer, mak
 from src.data.loaders import get_dataset
 from src.data.transforms import imagenet_train_transform
 from src.models.hashing.dcmh import DCMH
+from src.utils.checkpoint import find_latest_training_checkpoint
 from src.utils.config import experiment_run_dir, load_experiment, repo_root
 from src.utils.logger import setup_logging
 from src.utils.model_paths import local_files_only, resolve_pretrained_ref, torch_home_dir
@@ -49,24 +49,6 @@ def build_model(cfg, text_ref: str, hf_local_files_only: bool):
         freeze_text_encoder=bool(cfg.model.freeze_text_encoder),
         local_files_only=hf_local_files_only and tdim is None,
     )
-
-
-def find_latest_training_checkpoint(run_dir: Path) -> Path | None:
-    """Pick ``epoch_XXXX.pt`` with largest epoch number."""
-    run_dir = Path(run_dir)
-    if not run_dir.is_dir():
-        return None
-    best: Path | None = None
-    best_n = -1
-    for p in run_dir.glob("epoch_*.pt"):
-        m = re.match(r"epoch_(\d+)\.pt$", p.name)
-        if not m:
-            continue
-        n = int(m.group(1))
-        if n > best_n:
-            best_n = n
-            best = p
-    return best
 
 
 def parse_args():
