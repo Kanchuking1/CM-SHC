@@ -46,18 +46,32 @@ def load_model_and_dataset_for_eval(
     os.environ["TORCH_HOME"] = str(torch_home_dir(cache_root))
 
     device = resolve_device(str(cfg.device), device_override)
-    offline = local_files_only(cfg)
-    repo = str(cfg.model.backbone.text)
-    text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
 
-    tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
+    tdim = cfg.model.text_feature_dim
+    use_mlp_text = tdim is not None
+
+    if use_mlp_text:
+        text_ref, hf_lfo = "", False
+    else:
+        offline = local_files_only(cfg)
+        repo = str(cfg.model.backbone.text)
+        text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
+
+    if use_mlp_text:
+        tokenizer = None
+    else:
+        tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
     collate = make_dcmh_collate_fn(tokenizer, max_length=int(cfg.dataset.caption_max_length))
+
     transform = imagenet_train_transform()
+    ds_kwargs: dict = {}
+    if hasattr(cfg.dataset, "num_pseudo_classes") and cfg.dataset.num_pseudo_classes is not None:
+        ds_kwargs["num_pseudo_classes"] = int(cfg.dataset.num_pseudo_classes)
     ds = get_dataset(
         str(cfg.dataset.name),
         root_dir=cfg.dataset.root,
         transform=transform,
-        num_pseudo_classes=int(cfg.dataset.num_pseudo_classes),
+        **ds_kwargs,
     )
 
     model = build_model(cfg, text_ref=text_ref, hf_local_files_only=hf_lfo).to(device)

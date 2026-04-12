@@ -12,14 +12,23 @@ def binary_sign_codes(continuous: torch.Tensor) -> torch.Tensor:
     return continuous.sign()
 
 
-def hamming_distance_matrix(query_bits: torch.Tensor, db_bits: torch.Tensor) -> torch.Tensor:
+def hamming_distance_matrix(
+    query_bits: torch.Tensor,
+    db_bits: torch.Tensor,
+    chunk: int = 1024,
+) -> torch.Tensor:
     """
     Pairwise Hamming distances: (Nq, d) vs (Nd, d) -> (Nq, Nd) long counts.
     Bits are in {-1, +1} or {0, 1}; inequality counts mismatches.
+
+    Computed in row-chunks to avoid materialising an (Nq, Nd, d) broadcast tensor.
     """
-    q = query_bits.unsqueeze(1)
-    d = db_bits.unsqueeze(0)
-    return (q != d).sum(dim=-1).long()
+    nq = query_bits.shape[0]
+    out = torch.empty(nq, db_bits.shape[0], dtype=torch.long)
+    for i in range(0, nq, chunk):
+        q = query_bits[i : i + chunk].unsqueeze(1)
+        out[i : i + chunk] = (q != db_bits.unsqueeze(0)).sum(dim=-1).long()
+    return out
 
 
 @torch.no_grad()
@@ -47,10 +56,13 @@ def encode_paired_dataset(
         else:
             idx = torch.tensor(idx, dtype=torch.long)
         img = batch["img"].to(device)
-        ids = batch["input_ids"].to(device)
-        mask = batch["attention_mask"].to(device)
         f = model.encode_image(img)
-        g = model.encode_text(ids, mask)
+        if "text_features" in batch:
+            g = model.encode_text(text_features=batch["text_features"].to(device))
+        else:
+            ids = batch["input_ids"].to(device)
+            mask = batch["attention_mask"].to(device)
+            g = model.encode_text(ids, mask)
         chunks_i.append(binary_sign_codes(f).cpu())
         chunks_t.append(binary_sign_codes(g).cpu())
         chunks_idx.append(idx)
