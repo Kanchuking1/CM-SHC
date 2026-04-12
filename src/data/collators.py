@@ -51,14 +51,23 @@ def make_dcmh_collate_fn(tokenizer, max_length: int = 64):
 
 
 def build_train_labels_tensor(dataset, num_classes: int) -> torch.Tensor:
-    """(N, num_classes) multi-hot from class indices in dataset[i]['label']."""
+    """(N, num_classes) multi-hot from class indices.
+
+    Uses ``dataset.get_label(i)`` when available (pure integer lookup, no I/O),
+    falling back to the full ``dataset[i]["label"]`` path otherwise.
+    """
     import torch.nn.functional as F
 
-    ids = []
-    for i in range(len(dataset)):
-        y = dataset[i]["label"]
-        if not torch.is_tensor(y):
-            y = torch.as_tensor(y, dtype=torch.long)
-        ids.append(y.long().reshape(()))
-    Lidx = torch.stack(ids)
+    has_fast_path = callable(getattr(dataset, "get_label", None))
+    n = len(dataset)
+    if has_fast_path:
+        Lidx = torch.tensor([dataset.get_label(i) for i in range(n)], dtype=torch.long)
+    else:
+        ids = []
+        for i in range(n):
+            y = dataset[i]["label"]
+            if not torch.is_tensor(y):
+                y = torch.as_tensor(y, dtype=torch.long)
+            ids.append(y.long().reshape(()))
+        Lidx = torch.stack(ids)
     return F.one_hot(Lidx, num_classes=num_classes).float()

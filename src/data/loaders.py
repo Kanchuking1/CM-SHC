@@ -68,6 +68,9 @@ class Flickr8KDCMHDataset(Dataset):
         col = cap_col[0] if len(cap_col) else self._df.columns[-1]
         return self._df.iloc[index][col]
 
+    def get_label(self, index: int) -> int:
+        return hash_filename_label(self.data_files[index], self.num_pseudo_classes)
+
     def __getitem__(self, index: int) -> dict:
         fname = self.data_files[index]
         image_path = os.path.join(self.data_dir, fname)
@@ -75,7 +78,7 @@ class Flickr8KDCMHDataset(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         caption = self._caption_for(index, fname)
-        label = hash_filename_label(fname, self.num_pseudo_classes)
+        label = self.get_label(index)
         return {
             "index": index,
             "img": image,
@@ -151,6 +154,9 @@ class MIRFlickr25kDCMHDataset(Dataset):
         self._tags_cache[img_id] = text
         return text
 
+    def get_label(self, index: int) -> int:
+        return hash_filename_label(f"im{self.image_ids[index]}.jpg", self.num_pseudo_classes)
+
     def __getitem__(self, index: int) -> dict:
         img_id = self.image_ids[index]
         fname = f"im{img_id}.jpg"
@@ -159,7 +165,7 @@ class MIRFlickr25kDCMHDataset(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         text = self._load_tags(img_id)
-        label = hash_filename_label(fname, self.num_pseudo_classes)
+        label = self.get_label(index)
         return {
             "index": index,
             "img": image,
