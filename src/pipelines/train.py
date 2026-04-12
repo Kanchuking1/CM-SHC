@@ -135,11 +135,13 @@ def main():
     )
 
     start_epoch = 0
+    resumed_ckpt = None
     want_resume = bool(cfg.training.get("resume", False)) and not args.no_resume
     if want_resume:
         latest = find_latest_training_checkpoint(run_dir)
         if latest is not None:
             start_epoch = trainer.load_training_checkpoint(latest)
+            resumed_ckpt = latest
             logger.info("Resumed from %s at start_epoch=%s", latest, start_epoch)
 
     meta = {
@@ -158,6 +160,7 @@ def main():
         save_every=int(cfg.training.save_every),
         run_meta=meta,
         start_epoch=start_epoch,
+        resumed_checkpoint=resumed_ckpt,
     )
     print(f"Done. Checkpoints and run_config under: {run_dir}")
 

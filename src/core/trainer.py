@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,32 @@ from ..models.losses.dcmh_loss import (
     dcmh_full_loss,
 )
 from ..hashing.similarity import calc_neighbor
+
+
+def _plot_losses(history: list[dict], dest: Path) -> None:
+    """Save a multi-panel loss curve to *dest* (PNG)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    epochs = [h["epoch"] for h in history]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), tight_layout=True)
+
+    for ax, key, label in zip(
+        axes.flat,
+        ("total_scaled", "log_loss", "quant_loss", "full_objective"),
+        ("Total (scaled)", "Log-likelihood", "Quantization", "Full objective"),
+    ):
+        vals = [h.get(key, 0.0) for h in history]
+        ax.plot(epochs, vals, linewidth=1.2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(label)
+        ax.set_title(label)
+        ax.grid(True, alpha=0.3)
+
+    fig.savefig(dest, dpi=120)
+    plt.close(fig)
 
 
 class DCMHTrainer:
@@ -245,9 +272,21 @@ class DCMHTrainer:
         save_every: int = 1,
         run_meta: dict | None = None,
         start_epoch: int = 0,
+        resumed_checkpoint: Path | str | None = None,
     ) -> None:
         checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         run_meta = dict(run_meta) if run_meta else {}
+
+        history_path = checkpoint_dir / "loss_history.json" if checkpoint_dir else None
+        history: list[dict] = []
+        if history_path and history_path.exists():
+            try:
+                history = json.loads(history_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                history = []
+
+        prev_ckpt: Path | None = Path(resumed_checkpoint) if resumed_checkpoint else None
+
         for epoch in range(start_epoch, self.max_epoch):
             m = self.train_epoch()
             full = self.full_objective_value()
@@ -256,6 +295,23 @@ class DCMHTrainer:
                 f"log={m['log_loss']:.4f} quant={m['quant_loss']:.4f} bal={m['balance_loss']:.4f}  "
                 f"full_obj={full:.4f}"
             )
+
+            history.append({
+                "epoch": epoch + 1,
+                "log_loss": m["log_loss"],
+                "quant_loss": m["quant_loss"],
+                "balance_loss": m["balance_loss"],
+                "total_scaled": m["total_scaled"],
+                "full_objective": full,
+            })
+
+            if checkpoint_dir is not None:
+                history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+                try:
+                    _plot_losses(history, checkpoint_dir / "loss_curve.png")
+                except Exception:
+                    pass
+
             if checkpoint_dir is not None and save_every > 0:
                 if (epoch + 1) % save_every == 0 or epoch == self.max_epoch - 1:
                     ck_meta = {
@@ -264,5 +320,10 @@ class DCMHTrainer:
                         "full_objective": full,
                         "epoch_saved": epoch + 1,
                     }
-                    self.save_checkpoint(checkpoint_dir / f"epoch_{epoch + 1:04d}.pt", epoch + 1, ck_meta)
+                    new_ckpt = checkpoint_dir / f"epoch_{epoch + 1:04d}.pt"
+                    self.save_checkpoint(new_ckpt, epoch + 1, ck_meta)
+                    if prev_ckpt is not None and prev_ckpt.exists():
+                        prev_ckpt.unlink()
+                    prev_ckpt = new_ckpt
+
             self.lr_schedule()

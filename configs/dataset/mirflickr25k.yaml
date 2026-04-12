@@ -1,5 +1,6 @@
 dataset:
   name: mirflickr25k
-  root: data/raw/mirflickr25k
-  # Extend src/data/loaders.py + preprocessing when wired
-  split_file: null
+  # Path to folder containing im{1..25000}.jpg and meta/tags_raw/
+  root: /scratch/user/wahibkapdi/datasets/Flickr8k
+  num_pseudo_classes: 256
+  caption_max_length: 64

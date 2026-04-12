@@ -8,6 +8,19 @@ See repository tree: `configs/` (experiments), `src/` (library), `data/` (not ve
 
 For how configs merge, where models and data load, and a training flow diagram, see [docs/architecture.md](docs/architecture.md).
 
+## Data: MIR-Flickr-25k
+
+Download and unpack the v3b archive (from [LIACS / Leiden](http://press.liacs.nl/mirflickr/)):
+
+```bash
+wget http://press.liacs.nl/mirflickr/mirflickr25k.v3b/mirflickr25k.zip
+unzip mirflickr25k.zip
+```
+
+This produces a `mirflickr/` directory containing 25,000 images (`im1.jpg` … `im25000.jpg`) and a `meta/` tree with per-image Flickr tags under `meta/tags_raw/`.
+
+Point `dataset.root` in [`configs/dataset/mirflickr25k.yaml`](configs/dataset/mirflickr25k.yaml) at the unpacked directory. By default the config uses the relative path `../../Datasets/mirflickr`.
+
 ## Conda environment
 
 Requires **Python ≥ 3.10** (see `pyproject.toml`). From the repository root:
@@ -43,10 +56,10 @@ On **shared clusters**, prefer loading a **CUDA** module that matches the PyTorc
 
 ## Train (DCMH baseline)
 
-From the repo root, with Flickr8k at `data/raw/flickr8k` (`Images/` + `captions.txt`) or override paths in `configs/dataset/flickr8k.yaml`:
+From the repo root, with MIR-Flickr-25k data at the path configured in `configs/dataset/mirflickr25k.yaml`:
 
 ```bash
-python -m src.pipelines.train --config configs/experiments/exp_dcmh_flickr8k.yaml
+python -m src.pipelines.train --config configs/experiments/exp_dcmh_mirflickr25k.yaml
 ```
 
 Or:
@@ -59,16 +72,16 @@ Checkpoints and `run_config.json` are written under `experiments/checkpoints/<ex
 
 ## Evaluation and retrieval
 
-Metrics assume a **paired** dataset: row `i` pairs one image with one caption (as in `Flickr8KDCMHDataset`). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
+Metrics assume a **paired** dataset: row `i` pairs one image with one text (tags for MIR-Flickr-25k, captions for Flickr8k). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
 
 **Evaluate** (Recall@K, MRR for image→text and text→image). Writes JSON under `experiments/results/` by default.
 
 ```bash
 # Use the newest training checkpoint for this experiment config
-python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_flickr8k.yaml --latest
+python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_mirflickr25k.yaml --latest
 
 # Or pass a checkpoint path explicitly
-python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_flickr8k.yaml \
+python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_mirflickr25k.yaml \
   --checkpoint experiments/checkpoints/<run_name>/epoch_0120.pt
 
 # Optional: batch size, K list, custom JSON path
@@ -80,10 +93,10 @@ Or: `bash scripts/eval.sh --config ... --latest`
 **Retrieve** (print top-K matches for one query index):
 
 ```bash
-python -m src.pipelines.retrieve --config configs/experiments/exp_dcmh_flickr8k.yaml --latest \
+python -m src.pipelines.retrieve --config configs/experiments/exp_dcmh_mirflickr25k.yaml --latest \
   --query-index 0 --top-k 5 --mode i2t
 
-# Text query ranking images
+# Text (tags) query ranking images
 python -m src.pipelines.retrieve --config ... --checkpoint path/to/epoch_0120.pt --query-index 3 --mode t2i
 ```
 
@@ -94,7 +107,7 @@ Use the same `model_cache` / offline setup as training if the cluster has no Hub
 1. On a machine **with** internet, from the repo root, download Hugging Face snapshots and torchvision ResNet-50 weights into `model_cache/` (see `paths.model_cache` in [`configs/base.yaml`](configs/base.yaml)):
 
    ```bash
-   python -m src.pipelines.download_models --config configs/experiments/exp_dcmh_flickr8k.yaml
+   python -m src.pipelines.download_models --config configs/experiments/exp_dcmh_mirflickr25k.yaml
    ```
 
 2. Copy the repo (including `model_cache/`) to the cluster, or store `model_cache` on shared filesystem and point `paths.model_cache` at it.
@@ -114,10 +127,14 @@ If `training.resume` is true (see [`configs/base.yaml`](configs/base.yaml)), `tr
 From the repo root:
 
 ```bash
-sbatch scripts/slurm/dcmh_flickr8k_128bit.sbatch
+# Training
+sbatch scripts/slurm/dcmh_mirflickr25k_128bit.sbatch
+
+# Evaluation (uses --latest checkpoint)
+sbatch scripts/slurm/evaluate_dcmh_mirflickr25k_128bit.sbatch
 ```
 
-Edit `#SBATCH` lines in that file for your partition, wall time, and uncomment `module` / `conda` as needed.
+Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment `module` / `conda` as needed.
 
 ## Dependencies (summary)
 

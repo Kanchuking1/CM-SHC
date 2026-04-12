@@ -6,13 +6,13 @@ How the CM-SHC / SSHC research codebase is wired: configs, models, data, trainin
 
 ### 1. Where configs come from
 
-Training does not use a single monolithic YAML. The **experiment file** (e.g. `configs/experiments/exp_dcmh_flickr8k.yaml`) is a **pointer plus overrides**: it must contain `model: dcmh` and `dataset: flickr8k` (those values are **filenames without `.yaml`**).
+Training does not use a single monolithic YAML. The **experiment file** (e.g. `configs/experiments/exp_dcmh_mirflickr25k.yaml`) is a **pointer plus overrides**: it must contain `model: dcmh` and `dataset: mirflickr25k` (those values are **filenames without `.yaml`**).
 
 `load_experiment()` in `src/utils/config.py` **merges**, in order:
 
 1. **`configs/base.yaml`** — `seed`, `device`, `paths` (e.g. `model_cache`, `offline_mode`), `output.*`, `training.*`
 2. **`configs/model/{model_id}.yaml`** — e.g. `configs/model/dcmh.yaml`: `model.name`, `bit_dim`, `gamma`, `eta`, `backbone.image` / `backbone.text`, etc.
-3. **`configs/dataset/{dataset_id}.yaml`** — e.g. `configs/dataset/flickr8k.yaml`: `dataset.root`, `num_pseudo_classes`, `caption_max_length`
+3. **`configs/dataset/{dataset_id}.yaml`** — e.g. `configs/dataset/mirflickr25k.yaml`: `dataset.root`, `num_pseudo_classes`, `caption_max_length`
 4. Whatever is **left** in the experiment file after removing `model` and `dataset` (e.g. `experiment_name`, extra `training:` overrides)
 
 After merge, **relative paths** are resolved to absolute paths under the **repository root**: `dataset.root`, `output.root`, `paths.model_cache`.
@@ -35,7 +35,7 @@ After merge, **relative paths** are resolved to absolute paths under the **repos
 
 ### 3. Where data comes from
 
-`get_dataset()` in `src/data/loaders.py` switches on dataset name (e.g. Flickr8k → `Flickr8KDCMHDataset`). Samples are dicts with `index`, `img`, `label`, `text`.
+`get_dataset()` in `src/data/loaders.py` switches on dataset name (e.g. `mirflickr25k` → `MIRFlickr25kDCMHDataset`, `flickr8k` → `Flickr8KDCMHDataset`). Samples are dicts with `index`, `img`, `label`, `text`.
 
 `imagenet_train_transform` in `src/data/transforms.py` builds image preprocessing.
 
@@ -68,7 +68,7 @@ flowchart TB
     expYAML["configs/experiments/exp_*.yaml"]
     baseYAML["configs/base.yaml"]
     modelYAML["configs/model/dcmh.yaml"]
-    datasetYAML["configs/dataset/flickr8k.yaml"]
+    datasetYAML["configs/dataset/mirflickr25k.yaml"]
     expYAML --> loadExp["load_experiment"]
     baseYAML --> loadExp
     modelYAML --> loadExp
