@@ -11,6 +11,8 @@ from torch.optim import SGD
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from torch.nn.utils import clip_grad_norm_
+
 from ..models.hashing.dcmh import DCMH
 from ..models.losses.dcmh_loss import (
     dcmh_batch_loss_image,
@@ -81,9 +83,8 @@ class DCMHTrainer:
 
         self.train_L = train_labels.float().to(self.device)
         if self.train_L.dim() == 1:
-            self.train_L = torch.nn.functional.one_hot(
-                self.train_L.long(), num_classes=int(self.train_L.max().item()) + 1
-            ).float()
+            nc = int(self.train_L.max().item()) + 1
+            self.train_L = torch.nn.functional.one_hot(self.train_L.long(), num_classes=nc).float()
 
         self.F_buffer = torch.randn(self.num_train, self.bit, device=self.device)
         self.G_buffer = torch.randn(self.num_train, self.bit, device=self.device)
@@ -102,13 +103,11 @@ class DCMHTrainer:
         self.lr_txt_init = lr_txt
         self.optim_img = SGD(model.image_net.parameters(), lr=lr_img)
         if getattr(model, "text_backend", "transformer") == "mlp":
-            self.optim_txt = SGD(model.text_proj.parameters(), lr=lr_txt)
+            self._txt_params = list(model.text_proj.parameters())
         else:
             assert model.text_encoder is not None
-            self.optim_txt = SGD(
-                list(model.text_encoder.parameters()) + list(model.text_proj.parameters()),
-                lr=lr_txt,
-            )
+            self._txt_params = list(model.text_encoder.parameters()) + list(model.text_proj.parameters())
+        self.optim_txt = SGD(self._txt_params, lr=lr_txt)
 
         if lr_decay is None:
             self.lr_decay = (1e-6 / 10 ** (-1.5)) ** (1.0 / max(self.max_epoch, 1))
@@ -139,7 +138,7 @@ class DCMHTrainer:
         for batch in tqdm(self.train_loader, desc="img", leave=False):
             ind = batch["index"].numpy() if torch.is_tensor(batch["index"]) else np.asarray(batch["index"])
             image = batch["img"].to(self.device)
-            sample_L = batch["label"].to(self.device)
+            sample_L = batch["label"].to(self.device).float()
             if sample_L.dim() == 1:
                 sample_L = torch.nn.functional.one_hot(
                     sample_L.long(), num_classes=self.train_L.size(1)
@@ -161,11 +160,14 @@ class DCMHTrainer:
                 self.ones_,
                 self.num_train,
             )
-            loss = logloss + self.gamma * quant + self.eta * bal
-            loss = loss / (self.num_train * self.batch_size)
+            nll_scaled = logloss / (self.num_train * self.batch_size)
+            quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
+            bal_scaled = self.eta * bal / (self.num_train * self.bit)
+            loss = nll_scaled + quant_scaled + bal_scaled
 
             self.optim_img.zero_grad(set_to_none=True)
             loss.backward()
+            clip_grad_norm_(self.model.image_net.parameters(), max_norm=5.0)
             self.optim_img.step()
 
             metrics["log_loss"] += float(logloss.detach())
@@ -176,7 +178,7 @@ class DCMHTrainer:
 
         for batch in tqdm(self.train_loader, desc="txt", leave=False):
             ind = batch["index"].numpy() if torch.is_tensor(batch["index"]) else np.asarray(batch["index"])
-            sample_L = batch["label"].to(self.device)
+            sample_L = batch["label"].to(self.device).float()
             if sample_L.dim() == 1:
                 sample_L = torch.nn.functional.one_hot(
                     sample_L.long(), num_classes=self.train_L.size(1)
@@ -203,11 +205,14 @@ class DCMHTrainer:
                 self.ones_,
                 self.num_train,
             )
-            loss = logloss + self.gamma * quant + self.eta * bal
-            loss = loss / (self.num_train * self.batch_size)
+            nll_scaled = logloss / (self.num_train * self.batch_size)
+            quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
+            bal_scaled = self.eta * bal / (self.num_train * self.bit)
+            loss = nll_scaled + quant_scaled + bal_scaled
 
             self.optim_txt.zero_grad(set_to_none=True)
             loss.backward()
+            clip_grad_norm_(self._txt_params, max_norm=5.0)
             self.optim_txt.step()
 
             metrics["log_loss"] += float(logloss.detach())
@@ -252,7 +257,12 @@ class DCMHTrainer:
         torch.save(payload, path)
 
     def load_training_checkpoint(self, path: Path | str) -> int:
-        """Restore model, optimizers, and hash buffers. Returns next epoch index (0-based)."""
+        """Restore model, optimizers, and hash buffers. Returns next epoch index (0-based).
+
+        If the saved buffers have a different num_train (e.g. dataset filtering
+        changed), only model weights and optimizers are restored and buffers are
+        kept at their freshly-initialised values.
+        """
         path = Path(path)
         try:
             ckpt = torch.load(path, map_location=self.device, weights_only=False)
@@ -261,9 +271,18 @@ class DCMHTrainer:
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.optim_img.load_state_dict(ckpt["optim_img"])
         self.optim_txt.load_state_dict(ckpt["optim_txt"])
-        self.F_buffer = ckpt["F_buffer"].to(self.device)
-        self.G_buffer = ckpt["G_buffer"].to(self.device)
-        self.B = ckpt["B"].to(self.device)
+        saved_n = ckpt["F_buffer"].shape[0]
+        if saved_n == self.num_train:
+            self.F_buffer = ckpt["F_buffer"].to(self.device)
+            self.G_buffer = ckpt["G_buffer"].to(self.device)
+            self.B = ckpt["B"].to(self.device)
+        else:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Checkpoint buffers have %d rows but current dataset has %d; "
+                "re-initialising F/G/B buffers from scratch.",
+                saved_n, self.num_train,
+            )
         return int(ckpt["epoch"])
 
     def train(

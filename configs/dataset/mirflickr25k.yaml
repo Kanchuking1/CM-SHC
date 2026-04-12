@@ -4,5 +4,5 @@ dataset:
   # env var MIRFLICKR_ROOT for local dev (e.g. ../../Datasets/mirflickr).
   root: /scratch/user/wahibkapdi/datasets/mirflickr
   # root: ../../Datasets/mirflickr
-  num_pseudo_classes: 256
+  num_classes: 24
   caption_max_length: 64

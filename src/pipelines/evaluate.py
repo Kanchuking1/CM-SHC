@@ -1,7 +1,7 @@
 """
 Cross-modal retrieval metrics on the configured dataset (paired rows: image i matches text i).
 
-Uses Hamming distance on sign(hash) embeddings. Suitable for Flickr8k-style one-caption-per-row
+Uses Hamming distance on sign(hash) embeddings.
 layouts; for official splits, point ``dataset.root`` / future split configs to a test list.
 
 Usage::

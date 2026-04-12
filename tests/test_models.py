@@ -20,4 +20,3 @@ def test_config_compose():
     assert Path(exp).is_file()
     cfg = load_experiment(exp)
     assert cfg.model.name == "dcmh"
-    assert cfg.dataset.name == "Flickr8k"

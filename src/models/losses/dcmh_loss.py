@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from ...hashing.similarity import calc_neighbor
 
@@ -17,7 +18,7 @@ def dcmh_full_loss(
     eta: float,
 ) -> torch.Tensor:
     theta = torch.matmul(F_codes, G_codes.t()) / 2.0
-    term1 = torch.sum(torch.log(1.0 + torch.exp(theta)) - Sim * theta)
+    term1 = torch.sum(F.softplus(theta) - Sim * theta)
     term2 = torch.sum((B - F_codes) ** 2) + torch.sum((B - G_codes) ** 2)
     term3 = torch.sum(F_codes.sum(dim=0) ** 2) + torch.sum(G_codes.sum(dim=0) ** 2)
     return term1 + gamma * term2 + eta * term3
@@ -37,7 +38,7 @@ def dcmh_batch_loss_image(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     S = calc_neighbor(sample_labels, train_labels)
     theta = 0.5 * torch.matmul(cur_f, G_buffer.t())
-    logloss = -torch.sum(S * theta - torch.log(1.0 + torch.exp(theta)))
+    logloss = -torch.sum(S * theta - F.softplus(theta))
     quantization = torch.sum((B[ind, :] - cur_f) ** 2)
     unupdated_ind = np.setdiff1d(np.arange(num_train), ind, assume_unique=False)
     sum_batch = cur_f.t().mm(ones)
@@ -60,7 +61,7 @@ def dcmh_batch_loss_text(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     S = calc_neighbor(sample_labels, train_labels)
     theta = 0.5 * torch.matmul(cur_g, F_buffer.t())
-    logloss = -torch.sum(S * theta - torch.log(1.0 + torch.exp(theta)))
+    logloss = -torch.sum(S * theta - F.softplus(theta))
     quantization = torch.sum((B[ind, :] - cur_g) ** 2)
     unupdated_ind = np.setdiff1d(np.arange(num_train), ind, assume_unique=False)
     sum_batch = cur_g.t().mm(ones)

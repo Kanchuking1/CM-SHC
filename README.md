@@ -15,6 +15,10 @@ Download and unpack the v3b archive (from [LIACS / Leiden](http://press.liacs.nl
 ```bash
 wget http://press.liacs.nl/mirflickr/mirflickr25k.v3b/mirflickr25k.zip
 unzip mirflickr25k.zip
+cd mirflickr
+mkdir -p annotations
+wget http://press.liacs.nl/mirflickr/mirflickr25k.v3b/mirflickr25k_annotations_v080.zip
+unzip mirflickr25k_annotations_v080.zip
 ```
 
 This produces a `mirflickr/` directory containing 25,000 images (`im1.jpg` … `im25000.jpg`) and a `meta/` tree with per-image Flickr tags under `meta/tags_raw/`.
@@ -72,7 +76,7 @@ Checkpoints and `run_config.json` are written under `experiments/checkpoints/<ex
 
 ## Evaluation and retrieval
 
-Metrics assume a **paired** dataset: row `i` pairs one image with one text (tags for MIR-Flickr-25k, captions for Flickr8k). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
+Metrics assume a **paired** dataset: row `i` pairs one image with one text (annotations for MIR-Flickr-25k). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
 
 **Evaluate** (Recall@K, MRR for image→text and text→image). Writes JSON under `experiments/results/` by default.
 

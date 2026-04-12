@@ -99,11 +99,14 @@ def main():
     )
 
     transform = imagenet_train_transform()
+    ds_kwargs = {}
+    if hasattr(cfg.dataset, "num_pseudo_classes") and cfg.dataset.num_pseudo_classes is not None:
+        ds_kwargs["num_pseudo_classes"] = int(cfg.dataset.num_pseudo_classes)
     train_ds = get_dataset(
         str(cfg.dataset.name),
         root_dir=cfg.dataset.root,
         transform=transform,
-        num_pseudo_classes=int(cfg.dataset.num_pseudo_classes),
+        **ds_kwargs,
     )
 
     tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
@@ -119,7 +122,8 @@ def main():
         pin_memory=device.startswith("cuda"),
     )
 
-    train_labels = build_train_labels_tensor(train_ds, int(cfg.dataset.num_pseudo_classes))
+    num_cls = int(getattr(cfg.dataset, "num_classes", 0) or getattr(cfg.dataset, "num_pseudo_classes", 0))
+    train_labels = build_train_labels_tensor(train_ds, num_cls)
 
     model = build_model(cfg, text_ref=text_ref, hf_local_files_only=hf_lfo).to(device)
     trainer = DCMHTrainer(

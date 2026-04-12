@@ -35,7 +35,7 @@ After merge, **relative paths** are resolved to absolute paths under the **repos
 
 ### 3. Where data comes from
 
-`get_dataset()` in `src/data/loaders.py` switches on dataset name (e.g. `mirflickr25k` → `MIRFlickr25kDCMHDataset`, `flickr8k` → `Flickr8KDCMHDataset`). Samples are dicts with `index`, `img`, `label`, `text`.
+`get_dataset()` in `src/data/loaders.py` switches on dataset name (e.g. `mirflickr25k` → `MIRFlickr25kDCMHDataset`). Samples are dicts with `index`, `img`, `label`, `text`.
 
 `imagenet_train_transform` in `src/data/transforms.py` builds image preprocessing.
 

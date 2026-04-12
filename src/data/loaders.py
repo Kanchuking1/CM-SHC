@@ -12,83 +12,6 @@ from torch.utils.data import Dataset
 
 from .preprocessing import hash_filename_label, image_caption_first_map
 
-
-class Flickr8KDataset(Dataset):
-    """Legacy: PIL image + caption string."""
-
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.transform = transform
-        self.data_dir = os.path.join(root_dir, "Images")
-        self.label_file = os.path.join(root_dir, "captions.txt")
-        self.data_files = sorted(os.listdir(self.data_dir))
-        self.labels = pd.read_csv(self.label_file)
-
-    def __getitem__(self, index):
-        image_path = os.path.join(self.data_dir, self.data_files[index])
-        image = Image.open(image_path).convert("RGB")
-        if self.transform is not None:
-            image = self.transform(image)
-        return image, self.labels.iloc[index]["caption"]
-
-    def __len__(self):
-        return len(self.data_files)
-
-class Flickr8KDCMHDataset(Dataset):
-    """Flickr8k samples as dicts for DCMH (index, img tensor, label, text)."""
-
-    def __init__(
-        self,
-        root_dir: str | os.PathLike,
-        transform: Callable | None = None,
-        num_pseudo_classes: int = 256,
-    ):
-        self.root_dir = os.fspath(root_dir)
-        self.transform = transform
-        self.num_pseudo_classes = int(num_pseudo_classes)
-        self.data_dir = os.path.join(self.root_dir, "Images")
-        self.label_file = os.path.join(self.root_dir, "captions.txt")
-        self.data_files = sorted(
-            f for f in os.listdir(self.data_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
-        )
-        self._df = pd.read_csv(self.label_file)
-        self._cap_by_image = image_caption_first_map(self._df)
-
-    def _caption_for(self, index: int, filename: str) -> str:
-        if self._cap_by_image is not None:
-            cap = self._cap_by_image.get(filename)
-            if cap is None:
-                base = filename.rsplit(".", 1)[0]
-                cap = self._cap_by_image.get(base + ".jpg") or self._cap_by_image.get(base + ".jpeg")
-            if cap is not None:
-                return cap
-        cap_col = self._df.columns[
-            self._df.columns.str.lower().str.contains("caption|text", case=False, regex=True)
-        ]
-        col = cap_col[0] if len(cap_col) else self._df.columns[-1]
-        return self._df.iloc[index][col]
-
-    def get_label(self, index: int) -> int:
-        return hash_filename_label(self.data_files[index], self.num_pseudo_classes)
-
-    def __getitem__(self, index: int) -> dict:
-        fname = self.data_files[index]
-        image_path = os.path.join(self.data_dir, fname)
-        image = Image.open(image_path).convert("RGB")
-        if self.transform is not None:
-            image = self.transform(image)
-        caption = self._caption_for(index, fname)
-        label = self.get_label(index)
-        return {
-            "index": index,
-            "img": image,
-            "label": torch.tensor(label, dtype=torch.long),
-            "text": str(caption),
-        }
-
-    def __len__(self) -> int:
-        return len(self.data_files)
-
 class MIRFlickr25kDCMHDataset(Dataset):
     """MIR-Flickr-25k for DCMH: image tensor + user tags as text.
 
@@ -96,26 +19,38 @@ class MIRFlickr25kDCMHDataset(Dataset):
 
         im1.jpg  im2.jpg  ...  im25000.jpg
         meta/
-          tags_raw/          ← one file per image, one tag per line
+          tags/              ← one file per image, one tag per line
             tags1.txt  tags2.txt  ...  tags25000.txt
+        annotations/         ← 24-class potential labels from official download
+            sky.txt  clouds.txt  ...  (one image-id per line)
 
     Tags are joined with ``", "`` to form a pseudo-caption fed to the text
     encoder.  Images without a tags file (or with an empty file) get a
     fallback string so the tokenizer never receives an empty input.
+
+    Only images with **at least one** annotation are kept (the paper filters
+    to annotated images).
     """
 
+    ANNOTATION_CLASSES: list[str] = [
+        "animals", "baby", "bird", "car", "clouds", "dog", "female",
+        "flower", "food", "indoor", "lake", "male", "night", "people",
+        "plant_life", "portrait", "river", "sea", "sky", "structures",
+        "sunset", "transport", "tree", "water",
+    ]
+    NUM_CLASSES = len(ANNOTATION_CLASSES)
     FALLBACK_TEXT = "no tags"
 
     def __init__(
         self,
         root_dir: str | os.PathLike,
         transform: Callable | None = None,
-        num_pseudo_classes: int = 256,
+        **kwargs,
     ):
         self.root_dir = os.fspath(root_dir)
         self.transform = transform
-        self.num_pseudo_classes = int(num_pseudo_classes)
-        self.tags_dir = os.path.join(self.root_dir, "meta", "tags_raw")
+        self.tags_dir = os.path.join(self.root_dir, "meta", "tags")
+        self.ann_dir = os.path.join(self.root_dir, "annotations")
 
         if not os.path.isdir(self.root_dir):
             raise FileNotFoundError(
@@ -123,22 +58,50 @@ class MIRFlickr25kDCMHDataset(Dataset):
                 "Set dataset.root in configs/dataset/mirflickr25k.yaml or "
                 "export MIRFLICKR_ROOT=/path/to/mirflickr"
             )
+        if not os.path.isdir(self.ann_dir):
+            raise FileNotFoundError(
+                f"Annotations dir not found: {self.ann_dir!r}  "
+                "Download mirflickr25k_annotations_v080.zip from "
+                "http://press.liacs.nl/mirflickr/mirdownload.html "
+                "and extract into {self.root_dir}/annotations/"
+            )
 
-        self.image_ids: list[int] = []
+        all_ids: list[int] = []
         for f in os.listdir(self.root_dir):
             if f.startswith("im") and f.lower().endswith(".jpg"):
                 try:
-                    self.image_ids.append(int(f[2:].split(".")[0]))
+                    all_ids.append(int(f[2:].split(".")[0]))
                 except ValueError:
                     continue
-        self.image_ids.sort()
 
-        if not self.image_ids:
+        if not all_ids:
             raise FileNotFoundError(
                 f"No im*.jpg files found in {self.root_dir!r}  "
                 "Expected layout: im1.jpg, im2.jpg, …, im25000.jpg"
             )
 
+        max_id = max(all_ids)
+        full_labels = torch.zeros(max_id + 1, self.NUM_CLASSES, dtype=torch.float32)
+        for cls_idx, cls_name in enumerate(self.ANNOTATION_CLASSES):
+            ann_path = os.path.join(self.ann_dir, f"{cls_name}.txt")
+            if not os.path.isfile(ann_path):
+                continue
+            with open(ann_path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            full_labels[int(line), cls_idx] = 1.0
+                        except (ValueError, IndexError):
+                            continue
+
+        all_ids_set = set(all_ids)
+        self.image_ids: list[int] = sorted(
+            img_id for img_id in all_ids_set
+            if full_labels[img_id].sum() > 0
+        )
+
+        self._labels = full_labels[self.image_ids]  # (N_filtered, 24)
         self._tags_cache: dict[int, str] = {}
 
     def _load_tags(self, img_id: int) -> str:
@@ -154,8 +117,8 @@ class MIRFlickr25kDCMHDataset(Dataset):
         self._tags_cache[img_id] = text
         return text
 
-    def get_label(self, index: int) -> int:
-        return hash_filename_label(f"im{self.image_ids[index]}.jpg", self.num_pseudo_classes)
+    def get_label(self, index: int) -> torch.Tensor:
+        return self._labels[index]
 
     def __getitem__(self, index: int) -> dict:
         img_id = self.image_ids[index]
@@ -165,11 +128,11 @@ class MIRFlickr25kDCMHDataset(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         text = self._load_tags(img_id)
-        label = self.get_label(index)
+        label = self._labels[index]
         return {
             "index": index,
             "img": image,
-            "label": torch.tensor(label, dtype=torch.long),
+            "label": label,
             "text": text,
         }
 
@@ -179,9 +142,8 @@ class MIRFlickr25kDCMHDataset(Dataset):
 
 def get_dataset(name: str, root_dir: str | os.PathLike, transform: Callable | None = None, **kwargs) -> Dataset:
     key = name.strip().lower().replace("_", "").replace("-", "")
-    if key == "flickr8k":
-        return Flickr8KDCMHDataset(root_dir, transform=transform, **kwargs)
     if key == "mirflickr25k":
+        kwargs.pop("num_pseudo_classes", None)
         return MIRFlickr25kDCMHDataset(root_dir, transform=transform, **kwargs)
     if key == "coco":
         raise NotImplementedError("coco: add COCOCrossModalDataset in loaders.py")

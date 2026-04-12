@@ -51,23 +51,33 @@ def make_dcmh_collate_fn(tokenizer, max_length: int = 64):
 
 
 def build_train_labels_tensor(dataset, num_classes: int) -> torch.Tensor:
-    """(N, num_classes) multi-hot from class indices.
+    """(N, num_classes) multi-hot label matrix.
 
-    Uses ``dataset.get_label(i)`` when available (pure integer lookup, no I/O),
-    falling back to the full ``dataset[i]["label"]`` path otherwise.
+    If the dataset already provides multi-hot vectors (e.g. MIRFlickr25k with
+    real annotations), they are stacked directly.  Otherwise scalar class
+    indices are converted via one_hot.
     """
     import torch.nn.functional as F
 
     has_fast_path = callable(getattr(dataset, "get_label", None))
     n = len(dataset)
     if has_fast_path:
+        sample = dataset.get_label(0)
+        if torch.is_tensor(sample) and sample.dim() >= 1:
+            return torch.stack([dataset.get_label(i) for i in range(n)]).float()
         Lidx = torch.tensor([dataset.get_label(i) for i in range(n)], dtype=torch.long)
     else:
         ids = []
         for i in range(n):
             y = dataset[i]["label"]
             if not torch.is_tensor(y):
-                y = torch.as_tensor(y, dtype=torch.long)
-            ids.append(y.long().reshape(()))
-        Lidx = torch.stack(ids)
+                y = torch.as_tensor(y)
+            if y.dim() >= 1:
+                ids.append(y.float())
+            else:
+                ids.append(y.long().reshape(()))
+        stacked = torch.stack(ids)
+        if stacked.dim() == 2:
+            return stacked.float()
+        Lidx = stacked.long()
     return F.one_hot(Lidx, num_classes=num_classes).float()

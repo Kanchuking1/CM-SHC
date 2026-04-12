@@ -7,7 +7,6 @@
 #SBATCH --mail-user=wahibkapdi@tamu.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
 #
-# Resources — 25k images × tags need more RAM than Flickr8k
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
