@@ -5,5 +5,5 @@ dataset: mirflickr25k
 experiment_name: dcmh_mirflickr25k_128bit
 
 training:
-  max_epochs: 50
-  batch_size: 128
+  max_epochs: 120
+  batch_size: 32
