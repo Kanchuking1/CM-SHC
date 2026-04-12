@@ -10,7 +10,6 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from .preprocessing import hash_filename_label, image_caption_first_map
 
 class MIRFlickr25kDCMHDataset(Dataset):
     """MIR-Flickr-25k for DCMH: image tensor + user tags as text.
@@ -39,7 +38,7 @@ class MIRFlickr25kDCMHDataset(Dataset):
         "sunset", "transport", "tree", "water",
     ]
     NUM_CLASSES = len(ANNOTATION_CLASSES)
-    FALLBACK_TEXT = "no tags"
+    BOW_VOCAB_FILE = "doc/common_tags.txt"
 
     def __init__(
         self,
@@ -102,20 +101,37 @@ class MIRFlickr25kDCMHDataset(Dataset):
         )
 
         self._labels = full_labels[self.image_ids]  # (N_filtered, 24)
-        self._tags_cache: dict[int, str] = {}
 
-    def _load_tags(self, img_id: int) -> str:
-        if img_id in self._tags_cache:
-            return self._tags_cache[img_id]
-        tag_path = os.path.join(self.tags_dir, f"tags{img_id}.txt")
+        vocab, self._bow = self._build_bow()
+        self.bow_vocab: list[str] = vocab
+        self.bow_dim: int = len(vocab)
+
+    @staticmethod
+    def _read_tags_file(path: str) -> list[str]:
         try:
-            with open(tag_path, encoding="utf-8", errors="replace") as f:
-                tags = [line.strip() for line in f if line.strip()]
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return [line.strip().lower() for line in f if line.strip()]
         except FileNotFoundError:
-            tags = []
-        text = ", ".join(tags) if tags else self.FALLBACK_TEXT
-        self._tags_cache[img_id] = text
-        return text
+            return []
+
+    def _build_bow(self) -> tuple[list[str], torch.Tensor]:
+        """Load 1386-word vocabulary from ``doc/common_tags.txt`` and build BOW matrix."""
+        vocab_path = os.path.join(self.root_dir, "doc", "common_tags.txt")
+        vocab: list[str] = []
+        with open(vocab_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.strip().split()
+                if parts:
+                    vocab.append(parts[0].lower())
+        word2idx = {w: i for i, w in enumerate(vocab)}
+        bow = torch.zeros(len(self.image_ids), len(vocab), dtype=torch.float32)
+        for row, img_id in enumerate(self.image_ids):
+            tag_path = os.path.join(self.tags_dir, f"tags{img_id}.txt")
+            for tag in self._read_tags_file(tag_path):
+                idx = word2idx.get(tag)
+                if idx is not None:
+                    bow[row, idx] = 1.0
+        return vocab, bow
 
     def get_label(self, index: int) -> torch.Tensor:
         return self._labels[index]
@@ -127,13 +143,12 @@ class MIRFlickr25kDCMHDataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         if self.transform is not None:
             image = self.transform(image)
-        text = self._load_tags(img_id)
         label = self._labels[index]
         return {
             "index": index,
             "img": image,
             "label": label,
-            "text": text,
+            "text_features": self._bow[index],
         }
 
     def __len__(self) -> int:

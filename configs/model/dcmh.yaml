@@ -3,9 +3,10 @@ model:
   bit_dim: 128
   gamma: 1.0
   eta: 1.0
+  # MLP on BOW (paper default); set null for HF transformer
+  text_feature_dim: 1386
+  # only used when text_feature_dim is null
   freeze_text_encoder: false
-  # null = use HF transformer backbone; set int for MLP-on-features baseline
-  text_feature_dim: null
   backbone:
-    image: resnet50
-    text: huawei-noah/TinyBERT_General_4L_312D
+    image: alexnet              # alexnet (paper default) or resnet50
+    text: huawei-noah/TinyBERT_General_4L_312D  # only used when text_feature_dim is null

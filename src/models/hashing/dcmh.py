@@ -7,20 +7,31 @@ from __future__ import annotations
 
 import torch.nn as nn
 
-from ..backbones.cnn import ResNet50ImageEncoder
+from ..backbones.cnn import AlexNetImageEncoder, ResNet50ImageEncoder
 from ..backbones.text_encoder import HFTransformerTextEncoder
+
+_IMAGE_BACKBONES = {
+    "alexnet": AlexNetImageEncoder,
+    "resnet50": ResNet50ImageEncoder,
+}
 
 
 class DCMH(nn.Module):
     """
     Shared K-bit space for image and text; binary codes B = sign(F + G) in the trainer.
-    Set ``text_feature_dim`` to an int to use a shallow MLP on fixed vectors instead of HF.
+
+    Backbone selection is config-driven:
+      - ``image_backbone`` chooses the image CNN (``"alexnet"`` or ``"resnet50"``).
+      - ``text_feature_dim`` selects text path: an int triggers a 2-layer MLP on
+        fixed-length feature vectors (paper default: 1386-dim BOW); ``None``
+        triggers the HuggingFace transformer path.
     """
 
     def __init__(
         self,
         bit_dim: int,
         text_model_name: str,
+        image_backbone: str = "alexnet",
         text_feature_dim: int | None = None,
         freeze_text_encoder: bool = False,
         local_files_only: bool = False,
@@ -28,14 +39,21 @@ class DCMH(nn.Module):
         super().__init__()
         self.bit_dim = bit_dim
         self.text_backend = "mlp" if text_feature_dim is not None else "transformer"
-        self.image_net = ResNet50ImageEncoder(bit_dim)
+
+        img_cls = _IMAGE_BACKBONES.get(image_backbone)
+        if img_cls is None:
+            raise ValueError(
+                f"Unknown image backbone {image_backbone!r}. "
+                f"Choose from {list(_IMAGE_BACKBONES)}"
+            )
+        self.image_net = img_cls(bit_dim)
 
         if text_feature_dim is not None:
             self.text_encoder = None
             self.text_proj = nn.Sequential(
-                nn.Linear(text_feature_dim, max(bit_dim, 256)),
+                nn.Linear(text_feature_dim, 4096),
                 nn.ReLU(inplace=True),
-                nn.Linear(max(bit_dim, 256), bit_dim),
+                nn.Linear(4096, bit_dim),
             )
         else:
             enc = HFTransformerTextEncoder(

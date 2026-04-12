@@ -17,9 +17,7 @@ from ..models.hashing.dcmh import DCMH
 from ..models.losses.dcmh_loss import (
     dcmh_batch_loss_image,
     dcmh_batch_loss_text,
-    dcmh_full_loss,
 )
-from ..hashing.similarity import calc_neighbor
 
 
 def _plot_losses(history: list[dict], dest: Path) -> None:
@@ -89,8 +87,6 @@ class DCMHTrainer:
         self.F_buffer = torch.randn(self.num_train, self.bit, device=self.device)
         self.G_buffer = torch.randn(self.num_train, self.bit, device=self.device)
         self.B = torch.sign(self.F_buffer + self.G_buffer)
-
-        self.Sim = calc_neighbor(self.train_L, self.train_L)
 
         self.ones = torch.ones(self.batch_size, 1, device=self.device)
         self.ones_ = torch.ones(self.num_train - self.batch_size, 1, device=self.device)
@@ -228,17 +224,29 @@ class DCMHTrainer:
         return metrics
 
     def full_objective_value(self) -> float:
+        """Compute the full DCMH objective without materialising an (N, N) matrix on GPU.
+
+        The NLL term (``softplus(theta) - Sim * theta``) is computed in
+        row-chunks on CPU so that the peak memory stays bounded regardless of N.
+        """
+        chunk = 512
+        F_cpu = self.F_buffer.detach().cpu().float()
+        G_cpu = self.G_buffer.detach().cpu().float()
+        B_cpu = self.B.detach().cpu().float()
+        L_cpu = self.train_L.detach().cpu().float()
+
         with torch.no_grad():
-            return float(
-                dcmh_full_loss(
-                    self.B,
-                    self.F_buffer,
-                    self.G_buffer,
-                    self.Sim,
-                    self.gamma,
-                    self.eta,
-                )
-            )
+            nll = torch.tensor(0.0)
+            for i in range(0, self.num_train, chunk):
+                f_chunk = F_cpu[i : i + chunk]
+                l_chunk = L_cpu[i : i + chunk]
+                theta = f_chunk @ G_cpu.t() * 0.5
+                sim = (l_chunk @ L_cpu.t() > 0).float()
+                nll += torch.sum(torch.nn.functional.softplus(theta) - sim * theta)
+
+            quant = torch.sum((B_cpu - F_cpu) ** 2) + torch.sum((B_cpu - G_cpu) ** 2)
+            bal = torch.sum(F_cpu.sum(0) ** 2) + torch.sum(G_cpu.sum(0) ** 2)
+            return float(nll + self.gamma * quant + self.eta * bal)
 
     def save_checkpoint(self, path: Path | str, epoch: int, meta: dict | None = None) -> None:
         path = Path(path)

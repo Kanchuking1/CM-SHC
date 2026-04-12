@@ -42,9 +42,11 @@ def build_model(cfg, text_ref: str, hf_local_files_only: bool):
     tdim = cfg.model.text_feature_dim
     if tdim is not None:
         tdim = int(tdim)
+    image_backbone = str(getattr(cfg.model.backbone, "image", "alexnet"))
     return DCMH(
         bit_dim=int(cfg.model.bit_dim),
         text_model_name=text_ref,
+        image_backbone=image_backbone,
         text_feature_dim=tdim,
         freeze_text_encoder=bool(cfg.model.freeze_text_encoder),
         local_files_only=hf_local_files_only and tdim is None,
@@ -80,9 +82,15 @@ def main():
     if device.startswith("cuda") and not torch.cuda.is_available():
         device = "cpu"
 
-    offline = local_files_only(cfg)
-    repo = str(cfg.model.backbone.text)
-    text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
+    tdim = cfg.model.text_feature_dim
+    use_mlp_text = tdim is not None
+
+    if use_mlp_text:
+        text_ref, hf_lfo = "", False
+    else:
+        offline = local_files_only(cfg)
+        repo = str(cfg.model.backbone.text)
+        text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
 
     run_dir = experiment_run_dir(cfg)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -91,7 +99,10 @@ def main():
     logger = setup_logging(log_dir=log_root)
     logger.info("Experiment dir: %s", run_dir)
     logger.info("TORCH_HOME=%s", os.environ.get("TORCH_HOME"))
-    logger.info("HF pretrained ref: %s (local_files_only=%s)", text_ref, hf_lfo)
+    if use_mlp_text:
+        logger.info("Text encoder: MLP on %d-dim feature vectors", int(tdim))
+    else:
+        logger.info("HF pretrained ref: %s (local_files_only=%s)", text_ref, hf_lfo)
 
     (run_dir / "run_config.json").write_text(
         json.dumps(_cfg_to_json_dict(cfg), indent=2),
@@ -109,7 +120,10 @@ def main():
         **ds_kwargs,
     )
 
-    tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
+    if use_mlp_text:
+        tokenizer = None
+    else:
+        tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
     collate = make_dcmh_collate_fn(tokenizer, max_length=int(cfg.dataset.caption_max_length))
 
     loader = DataLoader(

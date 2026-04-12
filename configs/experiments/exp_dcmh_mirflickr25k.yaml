@@ -2,8 +2,8 @@
 model: dcmh
 dataset: mirflickr25k
 
-experiment_name: dcmh_mirflickr25k_128bit
+experiment_name: alexnet_mlp
 
 training:
-  max_epochs: 5
-  batch_size: 16
+  max_epochs: 50
+  batch_size: 32

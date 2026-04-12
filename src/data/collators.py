@@ -25,26 +25,44 @@ def load_hf_tokenizer(model_id: str, local_files_only: bool = False):
     raise RuntimeError(f"Could not load tokenizer for {model_id!r}.\n{lines}") from attempts[-1][1]
 
 
-def make_dcmh_collate_fn(tokenizer, max_length: int = 64):
+def make_dcmh_collate_fn(tokenizer=None, max_length: int = 64):
+    """Return a collate function.
+
+    When ``tokenizer`` is ``None`` the batch is expected to carry pre-computed
+    ``text_features`` tensors (e.g. BOW vectors) and no tokenization is done.
+    """
+
     def _collate(samples: list[dict]) -> dict:
         imgs = torch.stack([s["img"] for s in samples], dim=0)
         labels = torch.stack([s["label"] for s in samples], dim=0)
         idx = torch.tensor([s["index"] for s in samples], dtype=torch.long)
-        texts = [s["text"] for s in samples]
-        enc = tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors="pt",
-        )
-        out = {
+
+        out: dict = {
             "img": imgs,
             "label": labels,
             "index": idx,
-            "input_ids": enc["input_ids"],
-            "attention_mask": enc["attention_mask"],
         }
+
+        if "text_features" in samples[0]:
+            out["text_features"] = torch.stack(
+                [s["text_features"] for s in samples], dim=0
+            )
+        elif tokenizer is not None:
+            texts = [s["text"] for s in samples]
+            enc = tokenizer(
+                texts,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt",
+            )
+            out["input_ids"] = enc["input_ids"]
+            out["attention_mask"] = enc["attention_mask"]
+        else:
+            raise RuntimeError(
+                "Batch has no text_features and no tokenizer was provided."
+            )
+
         return out
 
     return _collate
