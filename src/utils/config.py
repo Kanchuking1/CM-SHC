@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from omegaconf import OmegaConf
 
 CONFIG_DIRNAME = "configs"
+
+_ENV_OVERRIDES: dict[str, str] = {
+    "MIRFLICKR_ROOT": "dataset.root",
+    "FLICKR8K_ROOT": "dataset.root",
+}
 
 
 def repo_root() -> Path:
@@ -54,6 +60,11 @@ def load_experiment(path: str | Path) -> Any:
     mc = OmegaConf.select(cfg, "paths.model_cache")
     if mc is not None and str(mc) and not Path(str(mc)).is_absolute():
         cfg.paths.model_cache = str((repo_root() / str(mc)).resolve())
+
+    for env_key, cfg_key in _ENV_OVERRIDES.items():
+        val = os.environ.get(env_key)
+        if val:
+            OmegaConf.update(cfg, cfg_key, val)
 
     return cfg
 

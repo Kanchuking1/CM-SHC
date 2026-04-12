@@ -114,6 +114,13 @@ class MIRFlickr25kDCMHDataset(Dataset):
         self.num_pseudo_classes = int(num_pseudo_classes)
         self.tags_dir = os.path.join(self.root_dir, "meta", "tags_raw")
 
+        if not os.path.isdir(self.root_dir):
+            raise FileNotFoundError(
+                f"MIRFlickr25k root not found: {self.root_dir!r}  "
+                "Set dataset.root in configs/dataset/mirflickr25k.yaml or "
+                "export MIRFLICKR_ROOT=/path/to/mirflickr"
+            )
+
         self.image_ids: list[int] = []
         for f in os.listdir(self.root_dir):
             if f.startswith("im") and f.lower().endswith(".jpg"):
@@ -122,6 +129,12 @@ class MIRFlickr25kDCMHDataset(Dataset):
                 except ValueError:
                     continue
         self.image_ids.sort()
+
+        if not self.image_ids:
+            raise FileNotFoundError(
+                f"No im*.jpg files found in {self.root_dir!r}  "
+                "Expected layout: im1.jpg, im2.jpg, …, im25000.jpg"
+            )
 
         self._tags_cache: dict[int, str] = {}
 
