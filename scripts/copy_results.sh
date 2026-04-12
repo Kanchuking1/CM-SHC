@@ -1,0 +1,1 @@
+scp -r wahibkapdi@faster.hprc.tamu.edu:/scratch/user/wahibkapdi/CM-SHC/experiments/checkpoints/dcmh_mirflickr25k_128bit_dcmh_mirflickr25k_128bit ./experiments/checkpoints/
