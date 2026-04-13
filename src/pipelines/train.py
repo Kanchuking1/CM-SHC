@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from src.core.trainer import DCMHTrainer
 from src.data.collators import build_train_labels_tensor, load_hf_tokenizer, make_dcmh_collate_fn
 from src.data.loaders import get_dataset
+from src.data.splits import SplitSubset, make_mirflickr_split
 from src.data.transforms import imagenet_train_transform
 from src.models.hashing.dcmh import DCMH
 from src.utils.checkpoint import find_latest_training_checkpoint
@@ -113,12 +114,27 @@ def main():
     ds_kwargs = {}
     if hasattr(cfg.dataset, "num_pseudo_classes") and cfg.dataset.num_pseudo_classes is not None:
         ds_kwargs["num_pseudo_classes"] = int(cfg.dataset.num_pseudo_classes)
-    train_ds = get_dataset(
+    full_ds = get_dataset(
         str(cfg.dataset.name),
         root_dir=cfg.dataset.root,
         transform=transform,
         **ds_kwargs,
     )
+
+    split_cfg = getattr(cfg.dataset, "split", None)
+    if split_cfg is not None:
+        q_size = int(split_cfg.query_size)
+        t_size = int(split_cfg.train_size)
+        _query_idx, train_idx, _db_idx = make_mirflickr_split(
+            len(full_ds), query_size=q_size, train_size=t_size, seed=int(cfg.seed),
+        )
+        train_ds = SplitSubset(full_ds, train_idx)
+        logger.info(
+            "Split: %d total -> %d query (held out), %d train, %d database",
+            len(full_ds), q_size, len(train_ds), len(_db_idx),
+        )
+    else:
+        train_ds = full_ds
 
     if use_mlp_text:
         tokenizer = None

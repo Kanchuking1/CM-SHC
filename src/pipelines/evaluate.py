@@ -1,13 +1,12 @@
 """
-Cross-modal retrieval metrics on the configured dataset (paired rows: image i matches text i).
-
-Uses Hamming distance on sign(hash) embeddings.
-layouts; for official splits, point ``dataset.root`` / future split configs to a test list.
+Cross-modal retrieval evaluation using the DCMH paper's protocol:
+  - 3-way split: query / train / database (Section 4.1)
+  - MAP with label-based relevance: relevant(i,j) = (L_i . L_j > 0)
 
 Usage::
 
-    python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_flickr8k.yaml --latest
-    python -m src.pipelines.evaluate --config ... --checkpoint experiments/checkpoints/.../epoch_0120.pt
+    python -m src.pipelines.evaluate --config configs/experiments/exp_dcmh_mirflickr25k.yaml --latest
+    python -m src.pipelines.evaluate --config ... --checkpoint experiments/checkpoints/.../epoch_0050.pt
 """
 
 from __future__ import annotations
@@ -18,8 +17,9 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader
 
-from src.core.metrics import mean_reciprocal_rank_hamming, recall_at_k_hamming
+from src.core.metrics import mean_average_precision_hamming
 from src.core.retrieval import encode_paired_dataset, hamming_distance_matrix
+from src.data.splits import SplitSubset, make_mirflickr_split
 from src.pipelines.inference_utils import (
     load_model_and_dataset_for_eval,
     resolve_checkpoint_path,
@@ -28,7 +28,7 @@ from src.utils.config import load_experiment
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="DCMH cross-modal retrieval evaluation")
+    p = argparse.ArgumentParser(description="DCMH cross-modal retrieval evaluation (MAP)")
     p.add_argument("--config", type=str, required=True)
     p.add_argument("--checkpoint", type=str, default=None, help="Path to epoch_*.pt")
     p.add_argument(
@@ -49,12 +49,6 @@ def parse_args():
         default=None,
         help="Write JSON metrics here (default: under experiments/results/)",
     )
-    p.add_argument(
-        "--ks",
-        type=str,
-        default="1,5,10",
-        help="Comma-separated K values for Recall@K",
-    )
     return p.parse_args()
 
 
@@ -63,16 +57,25 @@ def main():
     cfg = load_experiment(args.config)
     ckpt_path = resolve_checkpoint_path(cfg, args.checkpoint, args.latest)
 
-    cfg, model, collate, ds, device, ckpt_epoch, meta = load_model_and_dataset_for_eval(
+    cfg, model, collate, full_ds, device, ckpt_epoch, meta = load_model_and_dataset_for_eval(
         args.config,
         ckpt_path,
         device_override=args.device,
         cfg=cfg,
     )
 
+    split_cfg = cfg.dataset.split
+    query_idx, _train_idx, db_idx = make_mirflickr_split(
+        len(full_ds),
+        query_size=int(split_cfg.query_size),
+        train_size=int(split_cfg.train_size),
+        seed=int(cfg.seed),
+    )
+    query_ds = SplitSubset(full_ds, query_idx)
+    db_ds = SplitSubset(full_ds, db_idx)
+
     bs = args.batch_size if args.batch_size is not None else int(cfg.training.batch_size)
-    loader = DataLoader(
-        ds,
+    loader_kwargs = dict(
         batch_size=bs,
         shuffle=False,
         drop_last=False,
@@ -80,26 +83,51 @@ def main():
         collate_fn=collate,
         pin_memory=str(device).startswith("cuda"),
     )
+    query_loader = DataLoader(query_ds, **loader_kwargs)
+    db_loader = DataLoader(db_ds, **loader_kwargs)
 
-    h_img, h_txt, _idx = encode_paired_dataset(model, loader, device)
+    print(
+        f"Split: {len(full_ds)} total -> "
+        f"{len(query_ds)} query, {len(db_ds)} database",
+        flush=True,
+    )
 
-    dist_i2t = hamming_distance_matrix(h_img, h_txt)
-    dist_t2i = hamming_distance_matrix(h_txt, h_img)
+    print("Encoding query set...", flush=True)
+    h_img_q, h_txt_q, L_q, _ = encode_paired_dataset(model, query_loader, device)
+    print(f"  {h_img_q.size(0)} queries ({h_img_q.size(1)}-bit hashes)", flush=True)
 
-    ks = tuple(int(x.strip()) for x in args.ks.split(",") if x.strip())
-    r_i2t = recall_at_k_hamming(dist_i2t, ks=ks)
-    r_t2i = recall_at_k_hamming(dist_t2i, ks=ks)
-    mrr_i2t = mean_reciprocal_rank_hamming(dist_i2t)
-    mrr_t2i = mean_reciprocal_rank_hamming(dist_t2i)
+    print("Encoding database...", flush=True)
+    h_img_db, h_txt_db, L_db, _ = encode_paired_dataset(model, db_loader, device)
+    print(f"  {h_img_db.size(0)} database items", flush=True)
+
+    print("Computing Hamming distances (I->T)...", flush=True)
+    dist_i2t = hamming_distance_matrix(h_img_q, h_txt_db)
+    print("Computing Hamming distances (T->I)...", flush=True)
+    dist_t2i = hamming_distance_matrix(h_txt_q, h_img_db)
+
+    print("Computing MAP (I->T)...", flush=True)
+    map_i2t = mean_average_precision_hamming(dist_i2t, L_q, L_db)
+    print(f"  MAP I->T = {map_i2t:.4f}", flush=True)
+
+    print("Computing MAP (T->I)...", flush=True)
+    map_t2i = mean_average_precision_hamming(dist_t2i, L_q, L_db)
+    print(f"  MAP T->I = {map_t2i:.4f}", flush=True)
 
     report = {
         "config": str(Path(args.config).resolve()),
         "checkpoint": str(ckpt_path.resolve()),
         "checkpoint_epoch": ckpt_epoch,
-        "num_samples": int(h_img.size(0)),
-        "bit_dim": int(h_img.size(1)),
-        "recall_at_k": {"image_to_text": {str(k): v for k, v in r_i2t.items()}, "text_to_image": {str(k): v for k, v in r_t2i.items()}},
-        "mrr": {"image_to_text": mrr_i2t, "text_to_image": mrr_t2i},
+        "split": {
+            "total": len(full_ds),
+            "query": len(query_ds),
+            "database": len(db_ds),
+            "train": int(split_cfg.train_size),
+        },
+        "bit_dim": int(h_img_q.size(1)),
+        "map": {
+            "image_to_text": map_i2t,
+            "text_to_image": map_t2i,
+        },
         "meta": meta,
     }
 

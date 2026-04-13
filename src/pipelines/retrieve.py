@@ -1,12 +1,14 @@
 """
-Print top-K retrieval results for one query index (image-to-text or text-to-image).
+Print top-K retrieval results for one query (image-to-text or text-to-image).
 
-Assumes the dataset is paired: sample ``i`` pairs image i with caption i (same as evaluate).
+Uses the paper's 3-way split: queries come from the held-out query set,
+ranked against the database set.  Results are marked with ``+`` when the
+retrieved item shares at least one semantic label with the query.
 
 Usage::
 
-    python -m src.pipelines.retrieve --config configs/experiments/exp_dcmh_flickr8k.yaml --latest --query-index 0 --top-k 5
-    python -m src.pipelines.retrieve --config ... --checkpoint path/to/epoch_0120.pt --mode t2i --query-index 3
+    python -m src.pipelines.retrieve --config configs/experiments/exp_dcmh_mirflickr25k.yaml --latest --query-index 0 --top-k 10
+    python -m src.pipelines.retrieve --config ... --checkpoint path/to/epoch_0050.pt --mode t2i --query-index 3
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.core.retrieval import encode_paired_dataset, hamming_distance_matrix
+from src.data.splits import SplitSubset, make_mirflickr_split
 from src.pipelines.inference_utils import (
     load_model_and_dataset_for_eval,
     resolve_checkpoint_path,
@@ -31,7 +34,10 @@ def parse_args():
     p.add_argument("--latest", action="store_true")
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch-size", type=int, default=None)
-    p.add_argument("--query-index", type=int, required=True, help="Dataset index of the query")
+    p.add_argument(
+        "--query-index", type=int, required=True,
+        help="Index within the query set (0..query_size-1)",
+    )
     p.add_argument("--top-k", type=int, default=10)
     p.add_argument(
         "--mode",
@@ -48,20 +54,29 @@ def main():
     cfg = load_experiment(args.config)
     ckpt_path = resolve_checkpoint_path(cfg, args.checkpoint, args.latest)
 
-    cfg, model, collate, ds, device, ckpt_epoch, _meta = load_model_and_dataset_for_eval(
+    cfg, model, collate, full_ds, device, ckpt_epoch, _meta = load_model_and_dataset_for_eval(
         args.config,
         ckpt_path,
         device_override=args.device,
         cfg=cfg,
     )
 
-    n = len(ds)
-    if args.query_index < 0 or args.query_index >= n:
-        raise SystemExit(f"query-index must be in [0, {n - 1}]")
+    split_cfg = cfg.dataset.split
+    query_idx, _train_idx, db_idx = make_mirflickr_split(
+        len(full_ds),
+        query_size=int(split_cfg.query_size),
+        train_size=int(split_cfg.train_size),
+        seed=int(cfg.seed),
+    )
+    query_ds = SplitSubset(full_ds, query_idx)
+    db_ds = SplitSubset(full_ds, db_idx)
+
+    n_query = len(query_ds)
+    if args.query_index < 0 or args.query_index >= n_query:
+        raise SystemExit(f"query-index must be in [0, {n_query - 1}]")
 
     bs = args.batch_size if args.batch_size is not None else int(cfg.training.batch_size)
-    loader = DataLoader(
-        ds,
+    loader_kwargs = dict(
         batch_size=bs,
         shuffle=False,
         drop_last=False,
@@ -70,32 +85,42 @@ def main():
         pin_memory=str(device).startswith("cuda"),
     )
 
-    h_img, h_txt, sorted_idx = encode_paired_dataset(model, loader, device)
-    assert torch.equal(sorted_idx, torch.arange(n)), "Dataset indices must be 0..N-1 for retrieve"
+    print("Encoding query set...", flush=True)
+    h_img_q, h_txt_q, L_q, _ = encode_paired_dataset(model, DataLoader(query_ds, **loader_kwargs), device)
+    print("Encoding database...", flush=True)
+    h_img_db, h_txt_db, L_db, _ = encode_paired_dataset(model, DataLoader(db_ds, **loader_kwargs), device)
 
-    k = min(args.top_k, n)
+    qi = args.query_index
+    k = min(args.top_k, len(db_ds))
+    q_label = L_q[qi]
+
     if args.mode == "i2t":
-        dist = hamming_distance_matrix(h_img[args.query_index : args.query_index + 1], h_txt)[0]
+        dist = hamming_distance_matrix(h_img_q[qi : qi + 1], h_txt_db)[0]
         ranked = dist.argsort()[:k]
-        qcap = ds[args.query_index]["text"]
-        print(f"Query image index={args.query_index} (checkpoint epoch {ckpt_epoch})")
-        print(f"True caption: {qcap[:200]}{'...' if len(str(qcap)) > 200 else ''}\n")
-        print("Rank  Hamming  Caption (truncated)")
+        print(f"\nQuery image (query set index {qi}, epoch {ckpt_epoch})")
+        print(f"Query labels: {_label_names(q_label, full_ds)}\n")
+        print("Rank  Hamming  Rel  DB labels")
         for r, j in enumerate(ranked.tolist()):
-            cap = ds[j]["text"]
-            cap_s = str(cap).replace("\n", " ")[:120]
-            mark = "*" if j == args.query_index else " "
-            print(f"{r + 1:3d}   {dist[j].item():5d}  {mark} {cap_s}")
+            rel = "+" if (q_label @ L_db[j] > 0).item() else " "
+            print(f"{r + 1:4d}   {dist[j].item():5d}   {rel}   {_label_names(L_db[j], full_ds)}")
     else:
-        dist = hamming_distance_matrix(h_txt[args.query_index : args.query_index + 1], h_img)[0]
+        dist = hamming_distance_matrix(h_txt_q[qi : qi + 1], h_img_db)[0]
         ranked = dist.argsort()[:k]
-        qcap = ds[args.query_index]["text"]
-        print(f"Query text index={args.query_index} (checkpoint epoch {ckpt_epoch})")
-        print(f"Query: {str(qcap)[:300]}{'...' if len(str(qcap)) > 300 else ''}\n")
-        print("Rank  Hamming  Image index")
+        print(f"\nQuery text (query set index {qi}, epoch {ckpt_epoch})")
+        print(f"Query labels: {_label_names(q_label, full_ds)}\n")
+        print("Rank  Hamming  Rel  DB labels")
         for r, j in enumerate(ranked.tolist()):
-            mark = "*" if j == args.query_index else " "
-            print(f"{r + 1:3d}   {dist[j].item():5d}  {mark} {j}")
+            rel = "+" if (q_label @ L_db[j] > 0).item() else " "
+            print(f"{r + 1:4d}   {dist[j].item():5d}   {rel}   {_label_names(L_db[j], full_ds)}")
+
+
+def _label_names(label_vec: torch.Tensor, ds) -> str:
+    """Human-readable label names from a multi-hot vector."""
+    classes = getattr(ds, "ANNOTATION_CLASSES", None)
+    if classes is None:
+        return str(label_vec.nonzero(as_tuple=True)[0].tolist())
+    indices = label_vec.nonzero(as_tuple=True)[0].tolist()
+    return ", ".join(classes[i] for i in indices)
 
 
 if __name__ == "__main__":

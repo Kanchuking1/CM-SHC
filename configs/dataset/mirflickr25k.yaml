@@ -6,3 +6,6 @@ dataset:
   # root: ../../Datasets/mirflickr
   num_classes: 24
   caption_max_length: 64
+  split:
+    query_size: 2000
+    train_size: 10000
