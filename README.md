@@ -1,6 +1,9 @@
 # Cross-modal semantic hashing (CM-SHC lab layout)
 
-Research codebase with separated **data / models / losses / training / indexing**, config-driven experiments, and pluggable hashing methods. The default DCMH baseline replicates the architecture from [Jiang et al., CVPR 2017](https://openaccess.thecvf.com/content_cvpr_2017/papers/Jiang_Deep_Cross-Modal_Hashing_CVPR_2017_paper.pdf): an **AlexNet** (CNN-F) image encoder and a **2-layer MLP** on 1386-dim bag-of-words vectors for text.
+Research codebase with separated **data / models / losses / training / indexing**, config-driven experiments, and pluggable hashing methods. Two methods are supported:
+
+- **DCMH** (Jiang et al., CVPR 2017) — [paper](https://openaccess.thecvf.com/content_cvpr_2017/papers/Jiang_Deep_Cross-Modal_Hashing_CVPR_2017_paper.pdf). End-to-end cross-modal hashing with an **AlexNet** (CNN-F) image encoder and a **2-layer MLP** on 1386-dim bag-of-words vectors for text, alternating-optimization trainer. Fully implemented and used as the baseline.
+- **CM-SHC** (this project) — a cross-modal extension of *Semantic Hash Centers* (Chen et al., 2025) on top of the same backbones. Replaces DCMH's O(N²) pairwise similarity with data-driven semantic hash centers subject to the Gilbert-Varshamov bound. See [docs/cm_shc_plan.md](docs/cm_shc_plan.md) for the full design. **In progress** — Stages 1-2 (centers construction) are done; the joint trainer lands in the next iteration.
 
 ## Layout
 
@@ -100,6 +103,64 @@ model:
 
 When `text_feature_dim` is set (e.g. `1386`), the pipeline skips HuggingFace tokenizer loading entirely and feeds pre-computed BOW vectors through a 2-layer MLP (`1386 → 4096 (ReLU) → c`). When `text_feature_dim` is `null`, it loads the HF transformer specified in `backbone.text`.
 
+## CM-SHC (in progress)
+
+CM-SHC reuses DCMH's dataset / backbones / evaluation pipeline but swaps the training objective for a hash-center regression. The flow is:
+
+1. **(Optional) Train a multi-label classifier** on the same MIR-Flickr training split. Used later to build the SHC-style "visually confusable" class similarity matrix (`S-clf`). Skip this step if you only want label co-occurrence (`S-cooc`) or data-agnostic CSQ centers.
+2. **Build hash centers** — compute `S ∈ [0,1]^{C×C}`, solve for `H ∈ {-1,+1}^{q×C}` under the Gilbert-Varshamov constraint, and cache per-sample target codes.
+3. **Train CM-SHC** (Day 4+) — image and text encoders jointly regress to the target codes plus a cross-modal consistency term.
+4. **Evaluate** with the existing `src.pipelines.evaluate` (MAP protocol is unchanged).
+
+### Stage 1 — Multi-label classifier (for `S-clf` only)
+
+```bash
+python -m src.pipelines.train_classifier \
+    --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml \
+    --epochs 10 \
+    --output experiments/centers/mirflickr25k_classifier_probs.pt
+```
+
+Fine-tunes a ResNet18 (ImageNet init) with a 24-class sigmoid head, then dumps per-sample probabilities over the training split. Writes a `.json` summary alongside the `.pt` file for sanity-checking per-class prevalence.
+
+### Stage 2 — Build the centers
+
+Three similarity sources are supported; all three are covered by the ablation plan:
+
+```bash
+# Data-agnostic CSQ baseline (Hadamard rows; no classifier or labels needed)
+python -m src.pipelines.build_centers \
+    --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml \
+    --method csq
+
+# Label co-occurrence (no classifier needed)
+python -m src.pipelines.build_centers --config ... --method cooccurrence
+
+# SHC-style, driven by the classifier from Stage 1
+python -m src.pipelines.build_centers --config ... \
+    --method classifier \
+    --classifier-probs experiments/centers/mirflickr25k_classifier_probs.pt
+```
+
+Outputs go to `experiments/centers/{dataset}_{method}_q{q}.pt` and contain `H` (the `(q, C)` ±1 centers), `T_train` (per-sample ±1 target codes via bit-wise majority vote), `S` (the similarity matrix, or None for CSQ), plus metadata. The Gilbert-Varshamov bound for `(q, C)` is computed via `src.hashing.gv_bound.gilbert_varshamov_distance`; for the paper settings `GV(64, 24) = 25` and `GV(128, 24) = 54`.
+
+### Stage 3 — CM-SHC training (coming next)
+
+Config stub: `configs/model/cm_shc.yaml` and an experiment YAML pointing at `model: cm_shc` + `dataset: mirflickr25k`. The `CMSHCTrainer` class and joint loss (central-BCE + log-cosh quantization + cross-modal consistency) land alongside a full 128-bit experiment config in the Day 4 iteration.
+
+### SLURM (CM-SHC)
+
+```bash
+# 6h auxiliary run: train the classifier for S_clf
+sbatch scripts/slurm/train_classifier_mirflickr25k.sbatch
+
+# Main CM-SHC training and evaluation (once Stage 3 lands)
+sbatch scripts/slurm/cmshc_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_mirflickr25k_128bit.sbatch
+```
+
+All three mirror the existing DCMH sbatch templates (offline mode, `TORCH_HOME=model_cache/torch`, `CONFIG` env override).
+
 ## Evaluation and retrieval
 
 Metrics assume a **paired** dataset: row `i` pairs one image with one text (annotations for MIR-Flickr-25k). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
@@ -159,14 +220,19 @@ If `training.resume` is true (see [`configs/base.yaml`](configs/base.yaml)), `tr
 From the repo root:
 
 ```bash
-# Training
+# DCMH (baseline)
 sbatch scripts/slurm/dcmh_mirflickr25k_128bit.sbatch
-
-# Evaluation (uses --latest checkpoint)
 sbatch scripts/slurm/evaluate_dcmh_mirflickr25k_128bit.sbatch
+
+# CM-SHC auxiliary: fit the classifier used for S_clf (~6h wall)
+sbatch scripts/slurm/train_classifier_mirflickr25k.sbatch
+
+# CM-SHC main runs (training + evaluation at 128 bits)
+sbatch scripts/slurm/cmshc_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_mirflickr25k_128bit.sbatch
 ```
 
-Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment `module` / `conda` as needed.
+Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment `module` / `conda` as needed. All three CM-SHC templates accept a `CONFIG=` environment override so they can drive ablation configs without duplication.
 
 ## Dependencies (summary)
 
@@ -178,3 +244,5 @@ Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment
 ```bash
 pytest
 ```
+
+Covers the DCMH hashing utilities (`tests/test_hashing.py`, `tests/test_metrics.py`, `tests/test_models.py`, `tests/test_model_paths.py`) and the CM-SHC center machinery (`tests/test_centers.py` — GV bound, cosine / classifier similarity, SHC solver, CSQ Hadamard baseline, multi-label majority vote).

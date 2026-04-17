@@ -3,7 +3,7 @@ Download pretrained weights into ``model_cache`` for offline HPC training.
 
 Usage::
 
-    python -m src.pipelines.download_models --config configs/experiments/exp_dcmh_flickr8k.yaml
+    python -m src.pipelines.download_models --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def _prime_resnet50_weights(torch_home: Path) -> None:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, default="configs/experiments/exp_dcmh_flickr8k.yaml")
+    p.add_argument("--config", type=str, default="configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml")
     args = p.parse_args()
 
     cfg = load_experiment(args.config)

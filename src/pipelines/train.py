@@ -3,7 +3,7 @@ Train from merged YAML experiment config.
 
 Usage (from repository root)::
 
-    python -m src.pipelines.train --config configs/experiments/exp_dcmh_flickr8k.yaml
+    python -m src.pipelines.train --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def parse_args():
     p.add_argument(
         "--config",
         type=str,
-        default="configs/experiments/exp_dcmh_flickr8k.yaml",
+        default="configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml",
         help="Path to experiment YAML (merged with base, model, dataset).",
     )
     p.add_argument("--device", type=str, default=None, help="Override cfg.device (cuda/cpu)")

@@ -1,6 +1,6 @@
 model:
   name: dcmh
-  bit_dim: 128
+  bit_dim: 64
   gamma: 1.0
   eta: 1.0
   # MLP on BOW (paper default); set null for HF transformer
@@ -8,5 +8,5 @@ model:
   # only used when text_feature_dim is null
   freeze_text_encoder: false
   backbone:
-    image: alexnet              # alexnet (paper default) or resnet50
-    text: huawei-noah/TinyBERT_General_4L_312D  # only used when text_feature_dim is null
+    image: "alexnet"              # alexnet (paper default) or resnet50
+    text: "MLP" # only used when text_feature_dim is null
