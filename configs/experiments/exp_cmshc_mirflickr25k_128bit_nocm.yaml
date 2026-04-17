@@ -1,0 +1,16 @@
+# CM-SHC @ 128 bits on MIR-Flickr-25k, ablation: cross-modal consistency
+# term dropped (lambda_cm = 0). Tests whether center alignment alone is
+# enough to bridge the two modalities.
+model: cm_shc
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_128bit_nocm
+
+model:
+  bit_dim: 128
+  similarity_method: classifier
+  lambda_cm: 0.0
+
+training:
+  max_epochs: 200
+  batch_size: 64

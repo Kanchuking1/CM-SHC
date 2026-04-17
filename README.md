@@ -3,7 +3,7 @@
 Research codebase with separated **data / models / losses / training / indexing**, config-driven experiments, and pluggable hashing methods. Two methods are supported:
 
 - **DCMH** (Jiang et al., CVPR 2017) — [paper](https://openaccess.thecvf.com/content_cvpr_2017/papers/Jiang_Deep_Cross-Modal_Hashing_CVPR_2017_paper.pdf). End-to-end cross-modal hashing with an **AlexNet** (CNN-F) image encoder and a **2-layer MLP** on 1386-dim bag-of-words vectors for text, alternating-optimization trainer. Fully implemented and used as the baseline.
-- **CM-SHC** (this project) — a cross-modal extension of *Semantic Hash Centers* (Chen et al., 2025) on top of the same backbones. Replaces DCMH's O(N²) pairwise similarity with data-driven semantic hash centers subject to the Gilbert-Varshamov bound. See [docs/cm_shc_plan.md](docs/cm_shc_plan.md) for the full design. **In progress** — Stages 1-2 (centers construction) are done; the joint trainer lands in the next iteration.
+- **CM-SHC** (this project) — a cross-modal extension of *Semantic Hash Centers* (Chen et al., 2025) on top of the same backbones. Replaces DCMH's O(N²) pairwise similarity with data-driven semantic hash centers subject to the Gilbert-Varshamov bound. See [docs/cm_shc_plan.md](docs/cm_shc_plan.md) for the full design. **Implemented** — Stages 1-3 (similarity matrix, center optimization, joint trainer with central BCE + log-cosh quantization + cross-modal consistency) are wired end-to-end; runs pending on the HPC.
 
 ## Layout
 
@@ -144,9 +144,32 @@ python -m src.pipelines.build_centers --config ... \
 
 Outputs go to `experiments/centers/{dataset}_{method}_q{q}.pt` and contain `H` (the `(q, C)` ±1 centers), `T_train` (per-sample ±1 target codes via bit-wise majority vote), `S` (the similarity matrix, or None for CSQ), plus metadata. The Gilbert-Varshamov bound for `(q, C)` is computed via `src.hashing.gv_bound.gilbert_varshamov_distance`; for the paper settings `GV(64, 24) = 25` and `GV(128, 24) = 54`.
 
-### Stage 3 — CM-SHC training (coming next)
+### Stage 3 — CM-SHC training
 
-Config stub: `configs/model/cm_shc.yaml` and an experiment YAML pointing at `model: cm_shc` + `dataset: mirflickr25k`. The `CMSHCTrainer` class and joint loss (central-BCE + log-cosh quantization + cross-modal consistency) land alongside a full 128-bit experiment config in the Day 4 iteration.
+Once the centers file is on disk, train both encoders jointly against the cached target codes:
+
+```bash
+python -m src.pipelines.train \
+    --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml
+```
+
+`build_model` in `src/pipelines/train.py` branches on `cfg.model.name` and returns a `CMSHC` module (shared AlexNet / ResNet-50 + MLP-on-BOW or HF-transformer text encoder, projecting to `q` bits). The `CMSHCTrainer` class in `src/core/trainer.py` runs a single joint SGD update per mini-batch against four loss components (see `src/models/losses/semantic_center_loss.py`):
+
+```
+L = λ_center · L_center + λ_Q · L_quant + λ_CM · L_cross_modal + λ_bal · L_balance
+```
+
+with `L_center` the central BCE against `t_i`, `L_quant` a log-cosh smooth-binarization term on the sigmoid activation, `L_cross_modal = ‖tanh(f) − tanh(g)‖²`, and an optional DCMH-style bit-balance term (off by default). Mixture weights are read from the model config.
+
+Experiment YAMLs land under `configs/experiments/`:
+
+| File | Purpose |
+|------|---------|
+| `exp_cmshc_mirflickr25k_128bit.yaml` | Main run (S_clf centers, 128 bits). |
+| `exp_cmshc_mirflickr25k_64bit.yaml` | Bit-budget ablation (64 bits). |
+| `exp_cmshc_mirflickr25k_128bit_cooc.yaml` | Ablation: S built from label co-occurrence. |
+| `exp_cmshc_mirflickr25k_128bit_csq.yaml` | Ablation: CSQ Hadamard centers. |
+| `exp_cmshc_mirflickr25k_128bit_nocm.yaml` | Ablation: drop the cross-modal term (`λ_CM = 0`). |
 
 ### SLURM (CM-SHC)
 
@@ -154,12 +177,21 @@ Config stub: `configs/model/cm_shc.yaml` and an experiment YAML pointing at `mod
 # 6h auxiliary run: train the classifier for S_clf
 sbatch scripts/slurm/train_classifier_mirflickr25k.sbatch
 
-# Main CM-SHC training and evaluation (once Stage 3 lands)
+# Main CM-SHC training and evaluation
 sbatch scripts/slurm/cmshc_mirflickr25k_128bit.sbatch
 sbatch scripts/slurm/evaluate_cmshc_mirflickr25k_128bit.sbatch
+
+# Bit-budget ablation (64 bits)
+sbatch scripts/slurm/cmshc_mirflickr25k_64bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_mirflickr25k_64bit.sbatch
+
+# Method ablations (128 bits)
+sbatch scripts/slurm/cmshc_mirflickr25k_128bit_cooc.sbatch
+sbatch scripts/slurm/cmshc_mirflickr25k_128bit_csq.sbatch
+sbatch scripts/slurm/cmshc_mirflickr25k_128bit_nocm.sbatch
 ```
 
-All three mirror the existing DCMH sbatch templates (offline mode, `TORCH_HOME=model_cache/torch`, `CONFIG` env override).
+All mirror the existing DCMH sbatch templates (offline mode, `TORCH_HOME=model_cache/torch`, `CONFIG` env override).
 
 ## Evaluation and retrieval
 
@@ -245,4 +277,4 @@ Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment
 pytest
 ```
 
-Covers the DCMH hashing utilities (`tests/test_hashing.py`, `tests/test_metrics.py`, `tests/test_models.py`, `tests/test_model_paths.py`) and the CM-SHC center machinery (`tests/test_centers.py` — GV bound, cosine / classifier similarity, SHC solver, CSQ Hadamard baseline, multi-label majority vote).
+Covers the DCMH hashing utilities (`tests/test_hashing.py`, `tests/test_metrics.py`, `tests/test_models.py`, `tests/test_model_paths.py`), the CM-SHC center machinery (`tests/test_centers.py` — GV bound, cosine / classifier similarity, SHC solver, CSQ Hadamard baseline, multi-label majority vote), and the CM-SHC training-signal components (`tests/test_cmshc_loss.py` — central BCE saturation + gradient direction, log-cosh quantization zero at saturation, cross-modal MSE symmetry, joint-loss gradient sanity, and `CMSHC` model forward shapes).

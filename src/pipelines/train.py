@@ -17,11 +17,12 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from src.core.trainer import DCMHTrainer
+from src.core.trainer import CMSHCTrainer, DCMHTrainer
 from src.data.collators import build_train_labels_tensor, load_hf_tokenizer, make_dcmh_collate_fn
 from src.data.loaders import get_dataset
 from src.data.splits import SplitSubset, make_mirflickr_split
 from src.data.transforms import imagenet_train_transform
+from src.models.hashing.cm_shc import CMSHC
 from src.models.hashing.dcmh import DCMH
 from src.utils.checkpoint import find_latest_training_checkpoint
 from src.utils.config import experiment_run_dir, load_experiment, repo_root
@@ -35,23 +36,70 @@ def _cfg_to_json_dict(cfg) -> dict:
 
 
 def build_model(cfg, text_ref: str, hf_local_files_only: bool):
-    if cfg.model.name != "dcmh":
-        raise ValueError(
-            f"Only model.name=dcmh is implemented in the pipeline; got {cfg.model.name!r}. "
-            "Implement CM-SHC or switch config."
-        )
+    """Instantiate a hashing model from config.
+
+    Supported values of ``cfg.model.name``: ``dcmh`` (pairwise NLL) and
+    ``cm_shc`` (cross-modal semantic hash centers).  Both share the same
+    backbone composition so their encode_* signatures align.
+    """
+    name = str(cfg.model.name).lower()
     tdim = cfg.model.text_feature_dim
     if tdim is not None:
         tdim = int(tdim)
     image_backbone = str(getattr(cfg.model.backbone, "image", "alexnet"))
-    return DCMH(
+    freeze_text = bool(cfg.model.get("freeze_text_encoder", False))
+    common = dict(
         bit_dim=int(cfg.model.bit_dim),
         text_model_name=text_ref,
         image_backbone=image_backbone,
         text_feature_dim=tdim,
-        freeze_text_encoder=bool(cfg.model.freeze_text_encoder),
+        freeze_text_encoder=freeze_text,
         local_files_only=hf_local_files_only and tdim is None,
     )
+    if name == "dcmh":
+        return DCMH(**common)
+    if name == "cm_shc":
+        return CMSHC(**common)
+    raise ValueError(
+        f"Unknown model.name={name!r}; expected 'dcmh' or 'cm_shc'."
+    )
+
+
+def _resolve_centers_path(cfg) -> Path:
+    """Pick the cached (H, T_train) centers payload for this experiment.
+
+    Priority:
+    1. ``cfg.model.centers_path`` if set.
+    2. ``{output.root}/centers/{dataset}_{similarity_method}_q{bit}.pt`` --
+       mirrors the default path produced by ``src.pipelines.build_centers``.
+    """
+    explicit = cfg.model.get("centers_path", None)
+    if explicit:
+        return Path(str(explicit))
+    method = str(cfg.model.get("similarity_method", "cooccurrence"))
+    dataset = str(cfg.dataset.name)
+    q = int(cfg.model.bit_dim)
+    return Path(cfg.output.root) / "centers" / f"{dataset}_{method}_q{q}.pt"
+
+
+def _load_cmshc_targets(cfg, num_train: int, bit_dim: int) -> torch.Tensor:
+    path = _resolve_centers_path(cfg)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"CM-SHC centers file not found: {path}\n"
+            "Run `python -m src.pipelines.build_centers --config ... --method ...` first."
+        )
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    T = payload.get("T_train")
+    if T is None:
+        raise KeyError(f"Payload at {path} is missing 'T_train'.")
+    if T.shape != (num_train, bit_dim):
+        raise ValueError(
+            f"Cached T_train shape {tuple(T.shape)} does not match current split "
+            f"(num_train={num_train}, bit_dim={bit_dim}). Did you change dataset.split "
+            "or bit_dim between build_centers and train runs?"
+        )
+    return T.float()
 
 
 def parse_args():
@@ -156,17 +204,41 @@ def main():
     train_labels = build_train_labels_tensor(train_ds, num_cls)
 
     model = build_model(cfg, text_ref=text_ref, hf_local_files_only=hf_lfo).to(device)
-    trainer = DCMHTrainer(
-        model=model,
-        train_loader=loader,
-        train_labels=train_labels,
-        device=device,
-        gamma=float(cfg.model.gamma),
-        eta=float(cfg.model.eta),
-        max_epoch=int(cfg.training.max_epochs),
-        lr_img=float(cfg.training.lr_img),
-        lr_txt=float(cfg.training.lr_txt),
-    )
+    model_name = str(cfg.model.name).lower()
+    if model_name == "dcmh":
+        trainer = DCMHTrainer(
+            model=model,
+            train_loader=loader,
+            train_labels=train_labels,
+            device=device,
+            gamma=float(cfg.model.gamma),
+            eta=float(cfg.model.eta),
+            max_epoch=int(cfg.training.max_epochs),
+            lr_img=float(cfg.training.lr_img),
+            lr_txt=float(cfg.training.lr_txt),
+        )
+    elif model_name == "cm_shc":
+        T_train = _load_cmshc_targets(cfg, num_train=len(train_ds), bit_dim=int(cfg.model.bit_dim))
+        logger.info(
+            "Loaded CM-SHC targets %s from %s",
+            tuple(T_train.shape),
+            _resolve_centers_path(cfg),
+        )
+        trainer = CMSHCTrainer(
+            model=model,
+            train_loader=loader,
+            target_codes=T_train,
+            device=device,
+            lambda_center=float(cfg.model.get("lambda_center", 1.0)),
+            lambda_quant=float(cfg.model.get("lambda_quant", 0.1)),
+            lambda_cm=float(cfg.model.get("lambda_cm", 1.0)),
+            lambda_bal=float(cfg.model.get("lambda_bal", 0.0)),
+            max_epoch=int(cfg.training.max_epochs),
+            lr_img=float(cfg.training.lr_img),
+            lr_txt=float(cfg.training.lr_txt),
+        )
+    else:
+        raise ValueError(f"Unknown model.name={cfg.model.name!r}")
 
     start_epoch = 0
     resumed_ckpt = None
@@ -199,5 +271,5 @@ def main():
     print(f"Done. Checkpoints and run_config under: {run_dir}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

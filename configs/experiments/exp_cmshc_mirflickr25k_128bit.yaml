@@ -1,0 +1,24 @@
+# CM-SHC on MIR-Flickr-25k @ 128 bits.
+# Merges: base + model(cm_shc) + dataset(mirflickr25k) + overrides below.
+#
+# Before training, build per-sample target codes:
+#   python -m src.pipelines.build_centers \
+#       --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml \
+#       --method classifier \
+#       --classifier-probs experiments/centers/mirflickr25k_classifier_probs.pt
+#
+# Then:
+#   python -m src.pipelines.train \
+#       --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml
+model: cm_shc
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_128bit_clf
+
+model:
+  bit_dim: 128
+  similarity_method: classifier   # main run uses S from the aux classifier
+
+training:
+  max_epochs: 200
+  batch_size: 64

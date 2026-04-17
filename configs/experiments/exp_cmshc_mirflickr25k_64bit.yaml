@@ -1,0 +1,14 @@
+# CM-SHC on MIR-Flickr-25k @ 64 bits (bit-budget ablation).
+# Merges: base + model(cm_shc) + dataset(mirflickr25k) + overrides below.
+model: cm_shc
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_64bit_clf
+
+model:
+  bit_dim: 64
+  similarity_method: classifier
+
+training:
+  max_epochs: 200
+  batch_size: 64

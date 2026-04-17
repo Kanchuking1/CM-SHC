@@ -1,7 +1,37 @@
-# Placeholder for CM-SHC; swap experiment `model: cm_shc` when implemented.
+# CM-SHC (cross-modal semantic hash centers) model config.
+#
+# Structurally identical to DCMH (same AlexNet / ResNet-50 image encoder and
+# MLP-on-BOW or HF transformer text encoder) -- the training objective is
+# what differs.  See src.models.hashing.cm_shc.CMSHC and
+# src.models.losses.semantic_center_loss.cmshc_full_loss.
 model:
   name: cm_shc
-  bit_dim: 64
+  bit_dim: 128
+
+  # Backbone composition (mirrors DCMH).
   backbone:
-    image: resnet50
-    text: huawei-noah/TinyBERT_General_4L_312D
+    image: alexnet              # alexnet | resnet50
+    text: "MLP"                 # only used when text_feature_dim is null
+  text_feature_dim: 1386        # MIR-Flickr-25k BOW dim; null → HF transformer
+  freeze_text_encoder: false
+
+  # --- CM-SHC specific hyperparameters -------------------------------------
+
+  # How the (C, C) class similarity matrix S is built during center
+  # construction.  Must match the --method flag passed to
+  # src.pipelines.build_centers.
+  similarity_method: cooccurrence   # cooccurrence | classifier | csq
+
+  # Optional explicit path to the precomputed centers .pt.  Leave null to
+  # default to  {output.root}/centers/{dataset}_{similarity_method}_q{q}.pt.
+  centers_path: null
+
+  # Semantic-center solver hyperparameter (only used by build_centers).
+  mu: 1.0
+
+  # Joint-loss mixture weights (see semantic_center_loss.cmshc_full_loss):
+  #   L = λ_c · L_center + λ_Q · L_quant + λ_CM · L_cross_modal + λ_bal · L_balance
+  lambda_center: 1.0
+  lambda_quant: 0.1
+  lambda_cm: 1.0
+  lambda_bal: 0.0        # set >0 to enable DCMH-style bit balance
