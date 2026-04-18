@@ -18,18 +18,36 @@ class MIRFlickr25kDCMHDataset(Dataset):
 
         im1.jpg  im2.jpg  ...  im25000.jpg
         meta/
-          tags/              ← one file per image, one tag per line
+          tags/              one file per image, one tag per line
             tags1.txt  tags2.txt  ...  tags25000.txt
-        annotations/         ← 24-class potential labels from official download
+        annotations/         24-class potential labels from official download
             sky.txt  clouds.txt  ...  (one image-id per line)
 
-    Tags are joined with ``", "`` to form a pseudo-caption fed to the text
+    Tags are joined with ", " to form a pseudo-caption fed to the text
     encoder.  Images without a tags file (or with an empty file) get a
     fallback string so the tokenizer never receives an empty input.
 
-    Only images with **at least one** annotation are kept (the paper filters
+    Only images with at least one annotation are kept (the paper filters
     to annotated images).
+
+    Text modality
+    -------------
+    The dataset can expose one of two text representations in each sample:
+
+    * ``text_features`` -- a fixed 1386-dim BOW vector (default, used by the
+      MLP-on-BOW text backbone for the DCMH / CM-SHC paper configs).
+    * ``text_raw`` -- the raw joined-tag string, tokenized at collate time
+      by a transformer-style tokenizer (BERT, CLIP, ...).
+
+    Which one is emitted is controlled by the ``text_mode`` kwarg:
+
+    * ``"bow"``  (default) -- emit ``text_features`` only.
+    * ``"raw"`` -- emit ``text_raw`` only.
+    * ``"both"`` -- emit both (useful for tests and ablations).
     """
+
+    PROMPT_TEMPLATE = "a photo of {tags}"
+    EMPTY_PROMPT = "a photo"
 
     ANNOTATION_CLASSES: list[str] = [
         "animals", "baby", "bird", "car", "clouds", "dog", "female",
@@ -44,12 +62,20 @@ class MIRFlickr25kDCMHDataset(Dataset):
         self,
         root_dir: str | os.PathLike,
         transform: Callable | None = None,
+        text_mode: str = "bow",
         **kwargs,
     ):
         self.root_dir = os.fspath(root_dir)
         self.transform = transform
         self.tags_dir = os.path.join(self.root_dir, "meta", "tags")
         self.ann_dir = os.path.join(self.root_dir, "annotations")
+
+        text_mode = str(text_mode).strip().lower()
+        if text_mode not in ("bow", "raw", "both"):
+            raise ValueError(
+                f"text_mode must be one of 'bow' / 'raw' / 'both', got {text_mode!r}"
+            )
+        self.text_mode = text_mode
 
         if not os.path.isdir(self.root_dir):
             raise FileNotFoundError(
@@ -76,7 +102,7 @@ class MIRFlickr25kDCMHDataset(Dataset):
         if not all_ids:
             raise FileNotFoundError(
                 f"No im*.jpg files found in {self.root_dir!r}  "
-                "Expected layout: im1.jpg, im2.jpg, …, im25000.jpg"
+                "Expected layout: im1.jpg, im2.jpg, ..., im25000.jpg"
             )
 
         max_id = max(all_ids)
@@ -106,6 +132,9 @@ class MIRFlickr25kDCMHDataset(Dataset):
         self.bow_vocab: list[str] = vocab
         self.bow_dim: int = len(vocab)
 
+        # Raw prompt strings are cheap to precompute (just join tags).
+        self._prompts: list[str] = self._build_prompts()
+
     @staticmethod
     def _read_tags_file(path: str) -> list[str]:
         try:
@@ -133,8 +162,23 @@ class MIRFlickr25kDCMHDataset(Dataset):
                     bow[row, idx] = 1.0
         return vocab, bow
 
+    def _build_prompts(self) -> list[str]:
+        """Join each image's tags into one caption string."""
+        prompts: list[str] = []
+        for img_id in self.image_ids:
+            tag_path = os.path.join(self.tags_dir, f"tags{img_id}.txt")
+            tags = [t for t in self._read_tags_file(tag_path) if t]
+            if tags:
+                prompts.append(self.PROMPT_TEMPLATE.format(tags=", ".join(tags)))
+            else:
+                prompts.append(self.EMPTY_PROMPT)
+        return prompts
+
     def get_label(self, index: int) -> torch.Tensor:
         return self._labels[index]
+
+    def get_text_raw(self, index: int) -> str:
+        return self._prompts[index]
 
     def __getitem__(self, index: int) -> dict:
         img_id = self.image_ids[index]
@@ -144,12 +188,16 @@ class MIRFlickr25kDCMHDataset(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         label = self._labels[index]
-        return {
+        sample: dict = {
             "index": index,
             "img": image,
             "label": label,
-            "text_features": self._bow[index],
         }
+        if self.text_mode in ("bow", "both"):
+            sample["text_features"] = self._bow[index]
+        if self.text_mode in ("raw", "both"):
+            sample["text_raw"] = self._prompts[index]
+        return sample
 
     def __len__(self) -> int:
         return len(self.image_ids)
@@ -163,3 +211,27 @@ def get_dataset(name: str, root_dir: str | os.PathLike, transform: Callable | No
     if key == "coco":
         raise NotImplementedError("coco: add COCOCrossModalDataset in loaders.py")
     raise ValueError(f"Unknown dataset {name!r}")
+
+
+def _has_attr(ds, name: str) -> bool:
+    """Return True if ``ds`` (possibly a Subset) exposes attribute ``name``."""
+    if hasattr(ds, name):
+        return True
+    inner = getattr(ds, "dataset", None)
+    if inner is not None and hasattr(inner, name):
+        return True
+    return False
+
+
+def set_dataset_text_mode(ds, text_mode: str) -> None:
+    """Set ``text_mode`` on a dataset or wrapped subset, if supported."""
+    if hasattr(ds, "text_mode"):
+        ds.text_mode = text_mode
+        return
+    inner = getattr(ds, "dataset", None)
+    if inner is not None and hasattr(inner, "text_mode"):
+        inner.text_mode = text_mode
+        return
+    raise AttributeError(
+        f"Dataset {type(ds).__name__} has no text_mode attribute; cannot switch."
+    )
