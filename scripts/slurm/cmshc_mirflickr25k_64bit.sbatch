@@ -3,7 +3,6 @@
 #SBATCH --output=experiments/logs/slurm_%j.out
 #SBATCH --error=experiments/logs/slurm_%j.err
 #
-# Mail (TAMU Grace / most clusters)
 #SBATCH --mail-user=wahibkapdi@tamu.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
 #
@@ -17,14 +16,13 @@
 
 set -euo pipefail
 
-# Bit-budget ablation: same recipe as the 128-bit main run, dropped to 64
-# bits.  The build_centers .pt for q=64 must already exist under
-# experiments/centers/.
+# Bit-budget ablation: CM-SHC @ 64 bits (classifier-based centers).
+# Self-contained: builds classifier probs + centers if missing, then trains.
 #
 # Submit from repo root:   cd /path/to/SSHC && sbatch scripts/slurm/cmshc_mirflickr25k_64bit.sbatch
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
-mkdir -p experiments/logs experiments/checkpoints experiments/results
+mkdir -p experiments/logs experiments/checkpoints experiments/results experiments/centers
 
 export PYTHONUNBUFFERED=1
 export TORCH_HOME="${SLURM_SUBMIT_DIR:-$PWD}/model_cache/torch"
@@ -32,12 +30,50 @@ export CM_SHC_OFFLINE=1
 mkdir -p "$TORCH_HOME"
 
 CONFIG="${CONFIG:-configs/experiments/exp_cmshc_mirflickr25k_64bit.yaml}"
+DATASET="${DATASET:-mirflickr25k}"
+BIT_DIM="${BIT_DIM:-64}"
+CENTERS_METHOD="${CENTERS_METHOD:-classifier}"
+CLASSIFIER_EPOCHS="${CLASSIFIER_EPOCHS:-10}"
+
+CLASSIFIER_PROBS="experiments/centers/${DATASET}_classifier_probs.pt"
+CENTERS_FILE="experiments/centers/${DATASET}_${CENTERS_METHOD}_q${BIT_DIM}.pt"
 
 echo "Host: $(hostname)"
 echo "Start: $(date -Is)"
 echo "Config: $CONFIG"
+echo "Method: $CENTERS_METHOD   BitDim: $BIT_DIM"
+echo "Classifier probs: $CLASSIFIER_PROBS"
+echo "Centers file:     $CENTERS_FILE"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-}"
 
+if [[ "$CENTERS_METHOD" == "classifier" ]]; then
+    if [[ -f "$CLASSIFIER_PROBS" ]]; then
+        echo "[prep] classifier probs already exist; skipping train_classifier."
+    else
+        echo "[prep] classifier probs missing; running train_classifier (epochs=$CLASSIFIER_EPOCHS)..."
+        python -m src.pipelines.train_classifier \
+            --config "$CONFIG" \
+            --epochs "$CLASSIFIER_EPOCHS"
+    fi
+fi
+
+if [[ -f "$CENTERS_FILE" ]]; then
+    echo "[prep] centers file already exists; skipping build_centers."
+else
+    echo "[prep] centers file missing; running build_centers..."
+    if [[ "$CENTERS_METHOD" == "classifier" ]]; then
+        python -m src.pipelines.build_centers \
+            --config "$CONFIG" \
+            --method classifier \
+            --classifier-probs "$CLASSIFIER_PROBS"
+    else
+        python -m src.pipelines.build_centers \
+            --config "$CONFIG" \
+            --method "$CENTERS_METHOD"
+    fi
+fi
+
+echo "[train] starting CM-SHC training"
 python -m src.pipelines.train --config "$CONFIG" "$@"
 
 echo "End: $(date -Is)"

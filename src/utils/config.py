@@ -28,7 +28,21 @@ def load_experiment(path: str | Path) -> Any:
     """
     Merge: base.yaml + model/{name}.yaml + dataset/{name}.yaml + experiment overrides.
 
-    The experiment file must contain string keys ``model`` and ``dataset`` (filenames without .yaml).
+    The experiment file selects the model / dataset YAMLs via top-level keys
+    ``model`` and ``dataset``. Two accepted shapes per key:
+
+    * **Scalar** -- ``model: dcmh`` / ``dataset: mirflickr25k``. The value is
+      the filename stem under ``configs/model/`` or ``configs/dataset/``.
+    * **Mapping with ``name:`` subkey** -- lets an experiment override nested
+      model (or dataset) fields without duplicating the top-level key::
+
+          model:
+            name: cm_shc
+            bit_dim: 128
+            similarity_method: classifier
+
+      Any keys besides ``name`` are kept as overrides and merged after the
+      base model YAML.
     """
     path = Path(path)
     if not path.is_absolute():
@@ -36,8 +50,24 @@ def load_experiment(path: str | Path) -> Any:
     raw = OmegaConf.load(path)
     container: dict = OmegaConf.to_container(raw, resolve=True)
 
-    model_id = container.pop("model")
-    dataset_id = container.pop("dataset")
+    def _pop_selector(key: str) -> str:
+        val = container.pop(key)
+        if isinstance(val, dict):
+            if "name" not in val:
+                raise ValueError(
+                    f"{path}: `{key}` is a mapping but has no `name:` subkey to identify "
+                    f"the {key} YAML to load."
+                )
+            sel = val.pop("name")
+            # Put the remaining override fields back under the same top-level
+            # key so they merge cleanly after base/model/dataset.
+            if val:
+                container[key] = val
+            return sel
+        return val
+
+    model_id = _pop_selector("model")
+    dataset_id = _pop_selector("dataset")
     overrides = OmegaConf.create(container)
 
     parts = [

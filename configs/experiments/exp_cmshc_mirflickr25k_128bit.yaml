@@ -10,14 +10,14 @@
 # Then:
 #   python -m src.pipelines.train \
 #       --config configs/experiments/exp_cmshc_mirflickr25k_128bit.yaml
-model: cm_shc
+model:
+  name: cm_shc
+  bit_dim: 128
+  similarity_method: classifier   # main run uses S from the aux classifier
+
 dataset: mirflickr25k
 
 experiment_name: cmshc_mirflickr25k_128bit_clf
-
-model:
-  bit_dim: 128
-  similarity_method: classifier   # main run uses S from the aux classifier
 
 training:
   max_epochs: 200

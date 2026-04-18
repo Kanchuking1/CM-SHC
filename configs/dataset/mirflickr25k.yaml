@@ -2,8 +2,8 @@ dataset:
   name: mirflickr25k
   # Absolute path on the TAMU cluster; override in experiment YAML or set
   # env var MIRFLICKR_ROOT for local dev (e.g. ../../Datasets/mirflickr).
-  root: /scratch/user/wahibkapdi/datasets/mirflickr
-  # root: ../../Datasets/mirflickr
+  # root: /scratch/user/wahibkapdi/datasets/mirflickr
+  root: ../../Datasets/mirflickr
   num_classes: 24
   caption_max_length: 64
   split:

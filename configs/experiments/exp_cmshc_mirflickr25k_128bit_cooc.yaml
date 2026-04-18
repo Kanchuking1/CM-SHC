@@ -1,13 +1,13 @@
 # CM-SHC @ 128 bits on MIR-Flickr-25k, ablation: S built from label
 # co-occurrence (cheap, no auxiliary classifier).
-model: cm_shc
+model:
+  name: cm_shc
+  bit_dim: 128
+  similarity_method: cooccurrence
+
 dataset: mirflickr25k
 
 experiment_name: cmshc_mirflickr25k_128bit_cooc
-
-model:
-  bit_dim: 128
-  similarity_method: cooccurrence
 
 training:
   max_epochs: 200
