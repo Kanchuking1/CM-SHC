@@ -17,7 +17,7 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from src.core.trainer import CMSHCTrainer, DCMHTrainer
+from src.core.trainer import CMSHCTrainer, DCMHTrainer, count_parameters
 from src.data.collators import (
     build_train_labels_tensor,
     load_clip_tokenizer,
@@ -41,11 +41,7 @@ def _cfg_to_json_dict(cfg) -> dict:
 
 
 def _resolve_text_repo(backbone_text_field) -> str:
-    """Extract the HF repo id from a ``cfg.model.backbone.text`` field.
-
-    Accepts either a plain string (legacy) or a registry-style dict with a
-    ``model_name`` key (e.g. CLIP / HF transformer configs).
-    """
+    """Extract the HF repo id from a ``cfg.model.backbone.text`` field."""
     if backbone_text_field is None:
         return ""
     if isinstance(backbone_text_field, str):
@@ -60,7 +56,7 @@ def _resolve_text_repo(backbone_text_field) -> str:
 
 
 def _text_backbone_name(backbone_text_field) -> str:
-    """Return the text backbone's registry name ("clip" / "hf_transformer" / ...) or ""."""
+    """Return the text backbone's registry name (or "" for plain strings)."""
     if backbone_text_field is None or isinstance(backbone_text_field, str):
         return ""
     try:
@@ -73,14 +69,6 @@ def _text_backbone_name(backbone_text_field) -> str:
 
 
 def _backbone_field_to_cfg(field, hf_local_files_only: bool):
-    """Turn a ``cfg.model.backbone.<side>`` field into a registry cfg dict.
-
-    * ``None`` -> ``None`` (fall back to legacy kwargs)
-    * string -> ``None`` (legacy path)
-    * dict-like -> resolved Python ``dict``.  When the dict sets
-      ``local_files_only`` to ``"auto"`` (or leaves it unset) the resolved
-      ``hf_local_files_only`` value is used.
-    """
     if field is None:
         return None
     if isinstance(field, str):
@@ -97,13 +85,29 @@ def _backbone_field_to_cfg(field, hf_local_files_only: bool):
     return resolved
 
 
-def build_model(cfg, text_ref: str, hf_local_files_only: bool):
-    """Instantiate a hashing model from config.
+def _resolve_backbone_model_name(cfg_dict, cache_root, offline_hint: bool):
+    """If ``cfg_dict["model_name"]`` is an HF repo id with a complete local
+    snapshot under ``cache_root`` (or ``offline_hint`` is True), rewrite it
+    to the on-disk path and force ``local_files_only=True``.
 
-    Two YAML shapes are supported for ``cfg.model.backbone``: legacy strings
-    or registry-style dicts.  When a dict is provided, it is forwarded to
-    ``DCMH`` / ``CMSHC`` as ``image_cfg`` / ``text_cfg``.
+    This keeps CLIP / BERT backbones honest about offline mode: the
+    registry factories just call ``from_pretrained(model_name,
+    local_files_only=...)``, so the ``model_name`` must be a concrete
+    local path on HPC nodes without hub access.
     """
+    if not isinstance(cfg_dict, dict):
+        return cfg_dict
+    repo = cfg_dict.get("model_name")
+    if not repo:
+        return cfg_dict
+    ref, lfo = resolve_pretrained_ref(str(repo), cache_root, bool(offline_hint))
+    cfg_dict["model_name"] = ref
+    if lfo:
+        cfg_dict["local_files_only"] = True
+    return cfg_dict
+
+
+def build_model(cfg, text_ref: str, hf_local_files_only: bool):
     name = str(cfg.model.name).lower()
     tdim = cfg.model.text_feature_dim
     if tdim is not None:
@@ -114,6 +118,11 @@ def build_model(cfg, text_ref: str, hf_local_files_only: bool):
     raw_text = backbone.get("text", None) if backbone is not None else None
     image_cfg = _backbone_field_to_cfg(raw_image, hf_local_files_only)
     text_cfg = _backbone_field_to_cfg(raw_text, hf_local_files_only)
+
+    cache_root = Path(cfg.paths.model_cache)
+    offline = local_files_only(cfg)
+    image_cfg = _resolve_backbone_model_name(image_cfg, cache_root, offline)
+    text_cfg = _resolve_backbone_model_name(text_cfg, cache_root, offline)
 
     image_backbone = str(raw_image) if isinstance(raw_image, str) else "alexnet"
     freeze_text = bool(cfg.model.get("freeze_text_encoder", False))
@@ -168,6 +177,41 @@ def _load_cmshc_targets(cfg, num_train: int, bit_dim: int) -> torch.Tensor:
             "or bit_dim between build_centers and train runs?"
         )
     return T.float()
+
+
+def _optimizer_kwargs_from_cfg(cfg) -> dict:
+    """Pull optimizer knobs out of cfg.training and coerce types."""
+    tr = cfg.training
+    betas_raw = tr.get("betas", [0.9, 0.999])
+    if hasattr(betas_raw, "__iter__") and not isinstance(betas_raw, (str, bytes)):
+        betas_list = [float(x) for x in list(betas_raw)]
+        betas = tuple(betas_list) if len(betas_list) == 2 else (0.9, 0.999)
+    else:
+        betas = (0.9, 0.999)
+    return dict(
+        optimizer=str(tr.get("optimizer", "sgd")),
+        weight_decay=float(tr.get("weight_decay", 0.0)),
+        momentum=float(tr.get("momentum", 0.0)),
+        betas=betas,
+        eps=float(tr.get("eps", 1e-8)),
+    )
+
+
+def _log_trainable_summary(logger, model, opt_name: str) -> None:
+    img_tr, img_total = count_parameters(model.image_net)
+    txt_params = list(model.text_proj.parameters())
+    if model.text_encoder is not None:
+        txt_params += list(model.text_encoder.parameters())
+    txt_total = sum(p.numel() for p in txt_params)
+    txt_tr = sum(p.numel() for p in txt_params if p.requires_grad)
+    logger.info(
+        "Trainable params -- image: %s / %s (%.2f%%) | text: %s / %s (%.2f%%) | optimizer=%s",
+        f"{img_tr:,}", f"{img_total:,}",
+        100.0 * img_tr / max(img_total, 1),
+        f"{txt_tr:,}", f"{txt_total:,}",
+        100.0 * txt_tr / max(txt_total, 1),
+        opt_name,
+    )
 
 
 def parse_args():
@@ -242,9 +286,6 @@ def main():
     if hasattr(cfg.dataset, "num_pseudo_classes") and cfg.dataset.num_pseudo_classes is not None:
         ds_kwargs["num_pseudo_classes"] = int(cfg.dataset.num_pseudo_classes)
 
-    # Pick the text modality the dataset should emit.  MLP-on-BOW needs
-    # fixed-length feature vectors; every transformer-style backbone
-    # (BERT, CLIP, ...) needs raw strings to tokenize at collate time.
     text_mode = "bow" if use_mlp_text else "raw"
     ds_kwargs.setdefault("text_mode", text_mode)
 
@@ -276,7 +317,6 @@ def main():
         tokenizer = load_clip_tokenizer(text_ref, local_files_only=hf_lfo)
     else:
         tokenizer = load_hf_tokenizer(text_ref, local_files_only=hf_lfo)
-    # CLIP tokenizers cap at 77; honor that when shorter captions are fine.
     max_length = int(cfg.dataset.caption_max_length)
     if is_clip_text:
         clip_cap = int(getattr(tokenizer, "model_max_length", 77))
@@ -297,6 +337,10 @@ def main():
     train_labels = build_train_labels_tensor(train_ds, num_cls)
 
     model = build_model(cfg, text_ref=text_ref, hf_local_files_only=hf_lfo).to(device)
+
+    opt_kwargs = _optimizer_kwargs_from_cfg(cfg)
+    _log_trainable_summary(logger, model, opt_kwargs["optimizer"])
+
     model_name = str(cfg.model.name).lower()
     if model_name == "dcmh":
         trainer = DCMHTrainer(
@@ -309,6 +353,7 @@ def main():
             max_epoch=int(cfg.training.max_epochs),
             lr_img=float(cfg.training.lr_img),
             lr_txt=float(cfg.training.lr_txt),
+            **opt_kwargs,
         )
     elif model_name == "cm_shc":
         T_train = _load_cmshc_targets(cfg, num_train=len(train_ds), bit_dim=int(cfg.model.bit_dim))
@@ -329,6 +374,7 @@ def main():
             max_epoch=int(cfg.training.max_epochs),
             lr_img=float(cfg.training.lr_img),
             lr_txt=float(cfg.training.lr_txt),
+            **opt_kwargs,
         )
     else:
         raise ValueError(f"Unknown model.name={cfg.model.name!r}")

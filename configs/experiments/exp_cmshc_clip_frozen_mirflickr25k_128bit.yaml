@@ -1,0 +1,30 @@
+# CM-SHC @ 128 bits on MIR-Flickr-25k with FROZEN CLIP ViT-B/32 towers.
+#
+# Uses classifier-derived centers by default (S_clf, matching the main
+# CM-SHC run).  The classifier probs are trained on MIR-Flickr-25k
+# labels; the centers solver lives in src.pipelines.build_centers.
+#
+# Prep:
+#   python -m src.pipelines.download_models --config <this file>
+#   python -m src.pipelines.train_classifier --config <this file> --epochs 10
+#   python -m src.pipelines.build_centers --config <this file> \
+#       --method classifier \
+#       --classifier-probs experiments/centers/mirflickr25k_classifier_probs.pt
+model:
+  name: cm_shc_clip_frozen
+  bit_dim: 128
+  similarity_method: classifier
+
+dataset: mirflickr25k
+
+experiment_name: cmshc_clip_frozen_mirflickr25k_128bit
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 1.0e-4
+  lr_txt: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

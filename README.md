@@ -5,6 +5,8 @@ Research codebase with separated **data / models / losses / training / indexing*
 - **DCMH** (Jiang et al., CVPR 2017) — [paper](https://openaccess.thecvf.com/content_cvpr_2017/papers/Jiang_Deep_Cross-Modal_Hashing_CVPR_2017_paper.pdf). End-to-end cross-modal hashing with an **AlexNet** (CNN-F) image encoder and a **2-layer MLP** on 1386-dim bag-of-words vectors for text, alternating-optimization trainer. Fully implemented and used as the baseline.
 - **CM-SHC** (this project) — a cross-modal extension of *Semantic Hash Centers* (Chen et al., 2025) on top of the same backbones. Replaces DCMH's O(N²) pairwise similarity with data-driven semantic hash centers subject to the Gilbert-Varshamov bound. See [docs/cm_shc_plan.md](docs/cm_shc_plan.md) for the full design. **Implemented** — Stages 1-3 (similarity matrix, center optimization, joint trainer with central BCE + log-cosh quantization + cross-modal consistency) are wired end-to-end; runs pending on the HPC.
 
+Both methods can also be paired with a **CLIP ViT-B/32** dual-tower backbone (frozen or LoRA-adapted) in place of AlexNet + BOW-MLP. This gives a modern contrastive-pretrained starting point and a lightweight parameter-efficient fine-tune on top. See [§ CLIP backbones (frozen and LoRA)](#clip-backbones-frozen-and-lora) below.
+
 ## Layout
 
 See repository tree: `configs/` (experiments), `src/` (library), `data/` (not versioned), `experiments/` (logs, checkpoints, results), `scripts/`, `tests/`, `notebooks/`.
@@ -103,6 +105,61 @@ model:
 
 When `text_feature_dim` is set (e.g. `1386`), the pipeline skips HuggingFace tokenizer loading entirely and feeds pre-computed BOW vectors through a 2-layer MLP (`1386 → 4096 (ReLU) → c`). When `text_feature_dim` is `null`, it loads the HF transformer specified in `backbone.text`.
 
+The string forms above are a shorthand. The factory also accepts **dict-valued backbone entries** of the form `{name: <backbone>, ...kwargs}` — this is what the CLIP and LoRA configs below use. Any extra keys are forwarded as kwargs to the backbone class, so a single config file can pick the backbone family **and** configure its options (HF repo id, freezing, LoRA, projection-dim override, etc.).
+
+### CLIP backbones (frozen and LoRA)
+
+CLIP ViT-B/32 dual-tower backbones are exposed via the same registry. Four ready-to-use model configs live in `configs/model/`:
+
+| Config | Method | Image / text backbone | Notes |
+|--------|--------|-----------------------|-------|
+| [`dcmh_clip_frozen.yaml`](configs/model/dcmh_clip_frozen.yaml) | DCMH | CLIP, both towers frozen | Linear hashing heads on top of CLIP features. |
+| [`dcmh_clip_lora.yaml`](configs/model/dcmh_clip_lora.yaml) | DCMH | CLIP + LoRA adapters on both towers | Adapters on `q/k/v` attention projections. |
+| [`cm_shc_clip_frozen.yaml`](configs/model/cm_shc_clip_frozen.yaml) | CM-SHC | CLIP, both towers frozen | Hash centers + frozen CLIP features. |
+| [`cm_shc_clip_lora.yaml`](configs/model/cm_shc_clip_lora.yaml) | CM-SHC | CLIP + LoRA adapters | Flagship CLIP run. |
+
+Both CLIP towers come from the same HF repo (`openai/clip-vit-base-patch32`) and are loaded via `CLIPVisionModelWithProjection` + `CLIPTextModelWithProjection` so they produce aligned 512-dim features before the hashing head.
+
+Minimal config snippet for CLIP + LoRA:
+
+```yaml
+model:
+  text_feature_dim: null    # we use the raw tokenizer, not BOW
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      lora: { r: 8, lora_alpha: 16, lora_dropout: 0.05,
+              target_modules: [q_proj, k_proj, v_proj], bias: none }
+```
+
+When a `lora:` sub-dict is present, the backbone freezes its base parameters and wraps the encoder in a `peft.LoraConfig` + `get_peft_model` so **only** the adapter weights (`requires_grad=True`) are handed to the optimizer. Omit `lora:` entirely for a fully-frozen CLIP backbone.
+
+Because CLIP training is typically AdamW-based rather than paper-default SGD, the CLIP experiments set `training.optimizer: adamw` with per-tower learning rates (`lr_img`, `lr_txt`). The trainer honors these and filters parameters through `trainable_parameters()` so frozen base weights are never optimized.
+
+### Experiment configs (CLIP variants)
+
+Five experiment YAMLs under `configs/experiments/` compose the model configs above with the MIR-Flickr-25k dataset and CLIP-appropriate optimizer settings:
+
+| File | Purpose |
+|------|---------|
+| [`exp_dcmh_clip_frozen_mirflickr25k_128bit.yaml`](configs/experiments/exp_dcmh_clip_frozen_mirflickr25k_128bit.yaml) | DCMH on frozen CLIP (baseline probe of CLIP features). |
+| [`exp_dcmh_clip_lora_mirflickr25k_128bit.yaml`](configs/experiments/exp_dcmh_clip_lora_mirflickr25k_128bit.yaml) | DCMH with CLIP + LoRA. |
+| [`exp_cmshc_clip_frozen_mirflickr25k_128bit.yaml`](configs/experiments/exp_cmshc_clip_frozen_mirflickr25k_128bit.yaml) | CM-SHC on frozen CLIP (`similarity_method: classifier`). |
+| [`exp_cmshc_clip_lora_mirflickr25k_128bit.yaml`](configs/experiments/exp_cmshc_clip_lora_mirflickr25k_128bit.yaml) | **Flagship** — CM-SHC + CLIP + LoRA at 128 bits. |
+| [`exp_cmshc_clip_lora_mirflickr25k_64bit.yaml`](configs/experiments/exp_cmshc_clip_lora_mirflickr25k_64bit.yaml) | Bit-dimension ablation at 64 bits. |
+
 ## CM-SHC (in progress)
 
 CM-SHC reuses DCMH's dataset / backbones / evaluation pipeline but swaps the training objective for a hash-center regression. The flow is:
@@ -193,6 +250,28 @@ sbatch scripts/slurm/cmshc_mirflickr25k_128bit_nocm.sbatch
 
 All mirror the existing DCMH sbatch templates (offline mode, `TORCH_HOME=model_cache/torch`, `CONFIG` env override).
 
+### SLURM (CLIP + LoRA variants)
+
+Training and evaluation sbatches for each CLIP variant live alongside the others under `scripts/slurm/`:
+
+```bash
+# DCMH + CLIP
+sbatch scripts/slurm/dcmh_clip_frozen_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/dcmh_clip_lora_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_dcmh_clip_frozen_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_dcmh_clip_lora_mirflickr25k_128bit.sbatch
+
+# CM-SHC + CLIP
+sbatch scripts/slurm/cmshc_clip_frozen_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/cmshc_clip_lora_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/cmshc_clip_lora_mirflickr25k_64bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_clip_frozen_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_clip_lora_mirflickr25k_128bit.sbatch
+sbatch scripts/slurm/evaluate_cmshc_clip_lora_mirflickr25k_64bit.sbatch
+```
+
+Each training sbatch runs a **Stage 0** `python -m src.pipelines.download_models --config "$CONFIG"` to prime the CLIP snapshot into `model_cache/` before training. The CM-SHC variants additionally run Stage 1 (`train_classifier`) and Stage 2 (`build_centers --method classifier`) before Stage 3 training, with `BIT_DIM` parsed from the YAML so the centers file lands at the right path.
+
 ## Evaluation and retrieval
 
 Metrics assume a **paired** dataset: row `i` pairs one image with one text (annotations for MIR-Flickr-25k). Ground truth for query `i` is item `i` in the other modality. Hamming distance uses `sign` of the image and text embeddings.
@@ -227,21 +306,27 @@ Use the same `model_cache` / offline setup as training if the cluster has no Hub
 
 ### Offline HPC (no internet on compute nodes)
 
-1. On a machine **with** internet, from the repo root, download torchvision weights (AlexNet or ResNet-50, depending on your config) into `model_cache/` (see `paths.model_cache` in [`configs/base.yaml`](configs/base.yaml)). If using the HF transformer text path (`text_feature_dim: null`), also download Hugging Face snapshots:
+1. On a machine **with** internet, from the repo root, download torchvision weights (AlexNet or ResNet-50, depending on your config) into `model_cache/` (see `paths.model_cache` in [`configs/base.yaml`](configs/base.yaml)). If using the HF transformer text path (`text_feature_dim: null`) **or** a CLIP backbone (one or both towers), also download the Hugging Face snapshot(s):
 
    ```bash
    python -m src.pipelines.download_models --config configs/experiments/exp_dcmh_mirflickr25k.yaml
+
+   # CLIP variant — pulls the single HF repo used by both towers
+   python -m src.pipelines.download_models \
+       --config configs/experiments/exp_cmshc_clip_lora_mirflickr25k_128bit.yaml
    ```
+
+   `download_models.py` walks the `backbone` config: new-style dicts like `{name: clip, model_name: openai/clip-vit-base-patch32}` on either tower are extracted, de-duplicated (CLIP's two towers share one repo), and snapshot-downloaded into `model_cache/`. Legacy string-valued `backbone.text` configs still work unchanged.
 
 2. Copy the repo (including `model_cache/`) to the cluster, or store `model_cache` on shared filesystem and point `paths.model_cache` at it.
 
-3. Set `paths.offline_mode: true` in config (default in base) or export `CM_SHC_OFFLINE=1` so training uses `local_files_only` and does not call the Hub.
+3. Set `paths.offline_mode: true` in config (default in base) or export `CM_SHC_OFFLINE=1` so training uses `local_files_only` and does not call the Hub. At load time, `train.py` rewrites each backbone's `model_name` (e.g. `openai/clip-vit-base-patch32`) to the local snapshot path under `model_cache/` so the factory can reach the weights without talking to the Hub.
 
 4. Training sets `TORCH_HOME` to `model_cache/torch` for torchvision ImageNet weights. Optional: export the same in SLURM before `python -m src.pipelines.train`.
 
 `model_cache/` can be large; it is listed in `.gitignore` by default.
 
-> **Note:** With the paper defaults (AlexNet + BOW MLP), no HuggingFace downloads are needed — only the torchvision AlexNet weights.
+> **Note:** With the paper defaults (AlexNet + BOW MLP), no HuggingFace downloads are needed — only the torchvision AlexNet weights. CLIP variants need the CLIP repo (~600 MB); LoRA adapters are trained on top and add no pretrained weights to cache.
 
 ### Resume training
 
@@ -269,7 +354,7 @@ Edit `#SBATCH` lines in those files for your partition, wall time, and uncomment
 ## Dependencies (summary)
 
 - PyTorch + torchvision: install **before** `requirements.txt`, using [pytorch.org](https://pytorch.org) for your hardware.
-- Everything else: `requirements.txt` or `pip install -e .`
+- Everything else: `requirements.txt` or `pip install -e .` (includes `transformers`, `huggingface_hub`, and `peft` — the latter only needed if you run CLIP + LoRA variants).
 
 ## Tests
 

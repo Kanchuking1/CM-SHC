@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.optim import SGD
+from torch.optim import SGD, AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -27,8 +27,62 @@ from ..models.losses.dcmh_loss import (
 from ..models.losses.semantic_center_loss import cmshc_full_loss
 
 
-def _plot_losses(history: list[dict], dest: Path) -> None:
-    """Save a multi-panel loss curve to *dest* (PNG)."""
+def trainable_parameters(module: torch.nn.Module) -> list[torch.nn.Parameter]:
+    """Return only the parameters of *module* with ``requires_grad=True``.
+
+    This is what optimizers should ever see when part of the model is
+    frozen (frozen CLIP, LoRA with only adapters trainable, etc.):
+    including `requires_grad=False` params inflates the optimizer state,
+    wastes GPU memory, and -- for stateful optimizers like AdamW -- can
+    still produce spurious weight updates via momentum on zero gradients.
+    """
+    return [p for p in module.parameters() if p.requires_grad]
+
+
+def count_parameters(module: torch.nn.Module) -> tuple[int, int]:
+    """Return ``(trainable, total)`` parameter counts for *module*."""
+    total = sum(p.numel() for p in module.parameters())
+    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    return trainable, total
+
+
+def _resolve_opt_name(name):
+    name = (name or "sgd").strip().lower()
+    if name not in ("sgd", "adamw"):
+        raise ValueError(
+            f"Unsupported optimizer {name!r}; choose from 'sgd' / 'adamw'."
+        )
+    return name
+
+
+def build_optimizer(
+    params,
+    lr: float,
+    name: str = "sgd",
+    weight_decay: float = 0.0,
+    momentum: float = 0.0,
+    betas=(0.9, 0.999),
+    eps: float = 1e-8,
+):
+    """Construct an optimizer for ``params`` according to *name*.
+
+    ``params`` must already be filtered to ``requires_grad=True`` parameters
+    (call :func:`trainable_parameters` first).  An empty iterable raises a
+    ``ValueError`` to catch the "everything frozen by mistake" case early.
+    """
+    params = list(params)
+    if not params:
+        raise ValueError(
+            "No trainable parameters were supplied to build_optimizer(). "
+            "Did you accidentally freeze the entire module?"
+        )
+    kind = _resolve_opt_name(name)
+    if kind == "sgd":
+        return SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+    return AdamW(params, lr=lr, betas=tuple(betas), eps=eps, weight_decay=weight_decay)
+
+
+def _plot_losses(history, dest: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -65,13 +119,18 @@ class DCMHTrainer:
         model: DCMH,
         train_loader: DataLoader,
         train_labels: torch.Tensor,
-        device: torch.device | str = "cuda",
+        device = "cuda",
         gamma: float = 1.0,
         eta: float = 1.0,
         max_epoch: int = 500,
-        lr_img: float | None = None,
-        lr_txt: float | None = None,
-        lr_decay: float | None = None,
+        lr_img = None,
+        lr_txt = None,
+        lr_decay = None,
+        optimizer: str = "sgd",
+        weight_decay: float = 0.0,
+        momentum: float = 0.0,
+        betas=(0.9, 0.999),
+        eps: float = 1e-8,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -104,13 +163,24 @@ class DCMHTrainer:
             lr_txt = 10 ** (-1.5)
         self.lr_img_init = lr_img
         self.lr_txt_init = lr_txt
-        self.optim_img = SGD(model.image_net.parameters(), lr=lr_img)
+        self.optimizer_name = _resolve_opt_name(optimizer)
+
+        img_params = trainable_parameters(model.image_net)
+        self._img_params = img_params
         if getattr(model, "text_backend", "transformer") == "mlp":
-            self._txt_params = list(model.text_proj.parameters())
+            self._txt_params = trainable_parameters(model.text_proj)
         else:
             assert model.text_encoder is not None
-            self._txt_params = list(model.text_encoder.parameters()) + list(model.text_proj.parameters())
-        self.optim_txt = SGD(self._txt_params, lr=lr_txt)
+            self._txt_params = trainable_parameters(model.text_encoder) + trainable_parameters(model.text_proj)
+
+        self.optim_img = build_optimizer(
+            img_params, lr=lr_img, name=self.optimizer_name,
+            weight_decay=weight_decay, momentum=momentum, betas=betas, eps=eps,
+        )
+        self.optim_txt = build_optimizer(
+            self._txt_params, lr=lr_txt, name=self.optimizer_name,
+            weight_decay=weight_decay, momentum=momentum, betas=betas, eps=eps,
+        )
 
         if lr_decay is None:
             self.lr_decay = (1e-6 / 10 ** (-1.5)) ** (1.0 / max(self.max_epoch, 1))
@@ -127,7 +197,7 @@ class DCMHTrainer:
     def refresh_binary_codes(self) -> None:
         self.B = torch.sign(self.F_buffer + self.G_buffer)
 
-    def train_epoch(self) -> dict[str, float]:
+    def train_epoch(self):
         self.model.train()
         metrics = {
             "log_loss": 0.0,
@@ -152,16 +222,9 @@ class DCMHTrainer:
                 self.F_buffer[ind, :] = cur_f.detach()
 
             logloss, quant, bal = dcmh_batch_loss_image(
-                cur_f,
-                sample_L,
-                self.train_L,
-                self.G_buffer,
-                self.F_buffer,
-                self.B,
-                ind,
-                self.ones,
-                self.ones_,
-                self.num_train,
+                cur_f, sample_L, self.train_L,
+                self.G_buffer, self.F_buffer, self.B,
+                ind, self.ones, self.ones_, self.num_train,
             )
             nll_scaled = logloss / (self.num_train * self.batch_size)
             quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
@@ -170,7 +233,8 @@ class DCMHTrainer:
 
             self.optim_img.zero_grad(set_to_none=True)
             loss.backward()
-            clip_grad_norm_(self.model.image_net.parameters(), max_norm=5.0)
+            if self._img_params:
+                clip_grad_norm_(self._img_params, max_norm=5.0)
             self.optim_img.step()
 
             metrics["log_loss"] += float(logloss.detach())
@@ -197,16 +261,9 @@ class DCMHTrainer:
                 self.G_buffer[ind, :] = cur_g.detach()
 
             logloss, quant, bal = dcmh_batch_loss_text(
-                cur_g,
-                sample_L,
-                self.train_L,
-                self.F_buffer,
-                self.G_buffer,
-                self.B,
-                ind,
-                self.ones,
-                self.ones_,
-                self.num_train,
+                cur_g, sample_L, self.train_L,
+                self.F_buffer, self.G_buffer, self.B,
+                ind, self.ones, self.ones_, self.num_train,
             )
             nll_scaled = logloss / (self.num_train * self.batch_size)
             quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
@@ -215,7 +272,8 @@ class DCMHTrainer:
 
             self.optim_txt.zero_grad(set_to_none=True)
             loss.backward()
-            clip_grad_norm_(self._txt_params, max_norm=5.0)
+            if self._txt_params:
+                clip_grad_norm_(self._txt_params, max_norm=5.0)
             self.optim_txt.step()
 
             metrics["log_loss"] += float(logloss.detach())
@@ -231,11 +289,6 @@ class DCMHTrainer:
         return metrics
 
     def full_objective_value(self) -> float:
-        """Compute the full DCMH objective without materialising an (N, N) matrix on GPU.
-
-        The NLL term (``softplus(theta) - Sim * theta``) is computed in
-        row-chunks on CPU so that the peak memory stays bounded regardless of N.
-        """
         chunk = 512
         F_cpu = self.F_buffer.detach().cpu().float()
         G_cpu = self.G_buffer.detach().cpu().float()
@@ -255,7 +308,7 @@ class DCMHTrainer:
             bal = torch.sum(F_cpu.sum(0) ** 2) + torch.sum(G_cpu.sum(0) ** 2)
             return float(nll + self.gamma * quant + self.eta * bal)
 
-    def save_checkpoint(self, path: Path | str, epoch: int, meta: dict | None = None) -> None:
+    def save_checkpoint(self, path, epoch: int, meta=None) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -271,13 +324,7 @@ class DCMHTrainer:
             payload["meta"] = meta
         torch.save(payload, path)
 
-    def load_training_checkpoint(self, path: Path | str) -> int:
-        """Restore model, optimizers, and hash buffers. Returns next epoch index (0-based).
-
-        If the saved buffers have a different num_train (e.g. dataset filtering
-        changed), only model weights and optimizers are restored and buffers are
-        kept at their freshly-initialised values.
-        """
+    def load_training_checkpoint(self, path) -> int:
         path = Path(path)
         try:
             ckpt = torch.load(path, map_location=self.device, weights_only=False)
@@ -302,24 +349,24 @@ class DCMHTrainer:
 
     def train(
         self,
-        checkpoint_dir: Path | str | None = None,
+        checkpoint_dir=None,
         save_every: int = 1,
-        run_meta: dict | None = None,
+        run_meta=None,
         start_epoch: int = 0,
-        resumed_checkpoint: Path | str | None = None,
+        resumed_checkpoint=None,
     ) -> None:
         checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         run_meta = dict(run_meta) if run_meta else {}
 
         history_path = checkpoint_dir / "loss_history.json" if checkpoint_dir else None
-        history: list[dict] = []
+        history = []
         if history_path and history_path.exists():
             try:
                 history = json.loads(history_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 history = []
 
-        prev_ckpt: Path | None = Path(resumed_checkpoint) if resumed_checkpoint else None
+        prev_ckpt = Path(resumed_checkpoint) if resumed_checkpoint else None
 
         for epoch in range(start_epoch, self.max_epoch):
             m = self.train_epoch()
@@ -368,8 +415,7 @@ class DCMHTrainer:
 # =============================================================================
 
 
-def _plot_cmshc_losses(history: list[dict], dest: Path) -> None:
-    """Save a multi-panel loss curve for CM-SHC training to *dest* (PNG)."""
+def _plot_cmshc_losses(history, dest: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -395,39 +441,28 @@ def _plot_cmshc_losses(history: list[dict], dest: Path) -> None:
 
 
 class CMSHCTrainer:
-    """Single joint update over (image, text) → shared q-bit space.
-
-    Differences vs ``DCMHTrainer``:
-
-    * No ``F_buffer`` / ``G_buffer`` / ``B`` matrices -- supervision comes from
-      the pre-computed ``T_train`` (one ±1 target code per training sample).
-      Rebuilt only if needed via ``src.pipelines.build_centers``.
-    * One optimizer step per mini-batch, gradients flow through both encoders
-      simultaneously (no F-step / G-step alternation).
-    * Loss is the four-term :func:`cmshc_full_loss`; mixture weights are
-      configurable (``lambda_center``, ``lambda_quant``, ``lambda_cm``,
-      ``lambda_bal``).
-
-    Expects batch dicts with ``index``, ``img``, ``label`` and either
-    ``text_features`` (MLP path) or ``input_ids`` + ``attention_mask`` (HF
-    path).  ``T_train[index]`` selects the cached target codes for the batch.
-    """
+    """Single joint update over (image, text) -> shared q-bit space."""
 
     def __init__(
         self,
         model: CMSHC,
         train_loader: DataLoader,
         target_codes: torch.Tensor,
-        device: torch.device | str = "cuda",
+        device = "cuda",
         lambda_center: float = 1.0,
         lambda_quant: float = 0.1,
         lambda_cm: float = 1.0,
         lambda_bal: float = 0.0,
         max_epoch: int = 200,
-        lr_img: float | None = None,
-        lr_txt: float | None = None,
-        lr_decay: float | None = None,
+        lr_img = None,
+        lr_txt = None,
+        lr_decay = None,
         grad_clip_norm: float = 5.0,
+        optimizer: str = "sgd",
+        weight_decay: float = 0.0,
+        momentum: float = 0.0,
+        betas=(0.9, 0.999),
+        eps: float = 1e-8,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -446,7 +481,6 @@ class CMSHCTrainer:
                 f"target_codes must have shape (num_train={self.num_train}, "
                 f"bit={self.bit}); got {tuple(target_codes.shape)}"
             )
-        # T lives on GPU (same device as model) for fast indexing per batch.
         self.T = target_codes.to(self.device).float()
 
         self.lambda_center = float(lambda_center)
@@ -462,26 +496,29 @@ class CMSHCTrainer:
             lr_txt = 10 ** (-1.5)
         self.lr_img_init = lr_img
         self.lr_txt_init = lr_txt
-        self.optim_img = SGD(model.image_net.parameters(), lr=lr_img)
+        self.optimizer_name = _resolve_opt_name(optimizer)
+
+        img_params = trainable_parameters(model.image_net)
+        self._img_params = img_params
         if getattr(model, "text_backend", "transformer") == "mlp":
-            self._txt_params = list(model.text_proj.parameters())
+            self._txt_params = trainable_parameters(model.text_proj)
         else:
             assert model.text_encoder is not None
-            self._txt_params = list(model.text_encoder.parameters()) + list(
-                model.text_proj.parameters()
-            )
-        self.optim_txt = SGD(self._txt_params, lr=lr_txt)
+            self._txt_params = trainable_parameters(model.text_encoder) + trainable_parameters(model.text_proj)
+
+        self.optim_img = build_optimizer(
+            img_params, lr=lr_img, name=self.optimizer_name,
+            weight_decay=weight_decay, momentum=momentum, betas=betas, eps=eps,
+        )
+        self.optim_txt = build_optimizer(
+            self._txt_params, lr=lr_txt, name=self.optimizer_name,
+            weight_decay=weight_decay, momentum=momentum, betas=betas, eps=eps,
+        )
 
         if lr_decay is None:
-            self.lr_decay = (1e-6 / max(lr_img, 1e-12)) ** (
-                1.0 / max(self.max_epoch, 1)
-            )
+            self.lr_decay = (1e-6 / max(lr_img, 1e-12)) ** (1.0 / max(self.max_epoch, 1))
         else:
             self.lr_decay = lr_decay
-
-    # ------------------------------------------------------------------
-    # Schedule / state helpers
-    # ------------------------------------------------------------------
 
     def lr_schedule(self) -> None:
         for g in self.optim_img.param_groups:
@@ -489,7 +526,7 @@ class CMSHCTrainer:
         for g in self.optim_txt.param_groups:
             g["lr"] = max(g["lr"] * self.lr_decay, 1e-6)
 
-    def _encode_text_batch(self, batch: dict) -> torch.Tensor:
+    def _encode_text_batch(self, batch):
         if getattr(self.model, "text_backend", "transformer") == "mlp":
             tf = batch["text_features"].to(self.device)
             return self.model.encode_text(text_features=tf)
@@ -497,11 +534,7 @@ class CMSHCTrainer:
         attn = batch["attention_mask"].to(self.device)
         return self.model.encode_text(input_ids, attn)
 
-    # ------------------------------------------------------------------
-    # Training step
-    # ------------------------------------------------------------------
-
-    def train_epoch(self) -> dict[str, float]:
+    def train_epoch(self):
         self.model.train()
         running = {"center": 0.0, "quant": 0.0, "cross_modal": 0.0, "balance": 0.0, "total": 0.0}
         n_batches = 0
@@ -520,9 +553,7 @@ class CMSHCTrainer:
             g_logits = self._encode_text_batch(batch)
 
             loss, parts = cmshc_full_loss(
-                f_logits,
-                g_logits,
-                t,
+                f_logits, g_logits, t,
                 lambda_center=self.lambda_center,
                 lambda_quant=self.lambda_quant,
                 lambda_cm=self.lambda_cm,
@@ -533,8 +564,10 @@ class CMSHCTrainer:
             self.optim_txt.zero_grad(set_to_none=True)
             loss.backward()
             if self.grad_clip_norm > 0:
-                clip_grad_norm_(self.model.image_net.parameters(), max_norm=self.grad_clip_norm)
-                clip_grad_norm_(self._txt_params, max_norm=self.grad_clip_norm)
+                if self._img_params:
+                    clip_grad_norm_(self._img_params, max_norm=self.grad_clip_norm)
+                if self._txt_params:
+                    clip_grad_norm_(self._txt_params, max_norm=self.grad_clip_norm)
             self.optim_img.step()
             self.optim_txt.step()
 
@@ -545,11 +578,7 @@ class CMSHCTrainer:
         n = max(n_batches, 1)
         return {k: v / n for k, v in running.items()}
 
-    # ------------------------------------------------------------------
-    # Checkpointing
-    # ------------------------------------------------------------------
-
-    def save_checkpoint(self, path: Path | str, epoch: int, meta: dict | None = None) -> None:
+    def save_checkpoint(self, path, epoch: int, meta=None) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -568,7 +597,7 @@ class CMSHCTrainer:
             payload["meta"] = meta
         torch.save(payload, path)
 
-    def load_training_checkpoint(self, path: Path | str) -> int:
+    def load_training_checkpoint(self, path) -> int:
         path = Path(path)
         try:
             ckpt = torch.load(path, map_location=self.device, weights_only=False)
@@ -579,30 +608,26 @@ class CMSHCTrainer:
         self.optim_txt.load_state_dict(ckpt["optim_txt"])
         return int(ckpt["epoch"])
 
-    # ------------------------------------------------------------------
-    # Driver loop (mirrors DCMHTrainer.train signature)
-    # ------------------------------------------------------------------
-
     def train(
         self,
-        checkpoint_dir: Path | str | None = None,
+        checkpoint_dir=None,
         save_every: int = 1,
-        run_meta: dict | None = None,
+        run_meta=None,
         start_epoch: int = 0,
-        resumed_checkpoint: Path | str | None = None,
+        resumed_checkpoint=None,
     ) -> None:
         checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
         run_meta = dict(run_meta) if run_meta else {}
 
         history_path = checkpoint_dir / "loss_history.json" if checkpoint_dir else None
-        history: list[dict] = []
+        history = []
         if history_path and history_path.exists():
             try:
                 history = json.loads(history_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 history = []
 
-        prev_ckpt: Path | None = Path(resumed_checkpoint) if resumed_checkpoint else None
+        prev_ckpt = Path(resumed_checkpoint) if resumed_checkpoint else None
 
         for epoch in range(start_epoch, self.max_epoch):
             m = self.train_epoch()
@@ -612,10 +637,7 @@ class CMSHCTrainer:
                 f"cm={m['cross_modal']:.4f}  total={m['total']:.4f}"
             )
 
-            history.append({
-                "epoch": epoch + 1,
-                **m,
-            })
+            history.append({"epoch": epoch + 1, **m})
 
             if checkpoint_dir is not None:
                 history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")

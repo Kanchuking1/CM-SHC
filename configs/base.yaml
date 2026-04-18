@@ -24,3 +24,10 @@ training:
   # 10**(-1.5) ≈ 0.0316
   lr_img: 0.0316
   lr_txt: 0.0316
+  # Optimizer settings.  DCMH / CM-SHC paper configs use SGD; CLIP + LoRA
+  # runs flip this to 'adamw' with a small weight_decay.
+  optimizer: sgd
+  weight_decay: 0.0
+  momentum: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

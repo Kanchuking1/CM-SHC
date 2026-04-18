@@ -1,0 +1,22 @@
+# CM-SHC @ 64 bits on MIR-Flickr-25k with CLIP ViT-B/32 + LoRA.
+#
+# Bit-dimension ablation paired with exp_cmshc_clip_lora_mirflickr25k_128bit
+# so we can report mAP as a function of hash length (paper reports 16/32/64/128).
+model:
+  name: cm_shc_clip_lora
+  bit_dim: 64
+  similarity_method: classifier
+
+dataset: mirflickr25k
+
+experiment_name: cmshc_clip_lora_mirflickr25k_64bit
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

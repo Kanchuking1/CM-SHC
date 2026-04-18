@@ -24,6 +24,9 @@ Hashing models consume config dicts of the shape::
     image_cfg = {"name": "clip", "model_name": "openai/clip-vit-base-patch32"}
     text_cfg  = {"name": "clip", "model_name": "openai/clip-vit-base-patch32"}
 
+CLIP factories additionally accept a ``lora`` sub-dict; when present the
+encoder is wrapped with peft LoRA (see ``src/models/backbones/clip_backbone.py``).
+
 Legacy DCMH / CM-SHC kwargs (``image_backbone``, ``text_feature_dim``,
 ``text_model_name``, ``freeze_text_encoder``, ``local_files_only``) are
 translated via :func:`legacy_to_image_cfg` / :func:`legacy_to_text_cfg`
@@ -76,6 +79,7 @@ def _clip_image_factory(
     freeze: bool = True,
     local_files_only: bool = False,
     renormalize: bool = True,
+    lora: dict[str, Any] | None = None,
     **_: Any,
 ) -> nn.Module:
     # Lazy import so test suites that do not touch CLIP do not need the
@@ -88,6 +92,7 @@ def _clip_image_factory(
         freeze=freeze,
         local_files_only=local_files_only,
         renormalize=renormalize,
+        lora_cfg=lora,
     )
 
 
@@ -96,6 +101,7 @@ def _clip_text_factory(
     model_name: str = "openai/clip-vit-base-patch32",
     freeze: bool = True,
     local_files_only: bool = False,
+    lora: dict[str, Any] | None = None,
     **_: Any,
 ) -> nn.Module:
     from .clip_backbone import CLIPTextBackbone
@@ -105,6 +111,7 @@ def _clip_text_factory(
         out_dim=out_dim,
         freeze=freeze,
         local_files_only=local_files_only,
+        lora_cfg=lora,
     )
 
 
