@@ -20,6 +20,8 @@ experiments/checkpoints/*
 !experiments/checkpoints/.gitkeep
 experiments/results/*
 !experiments/results/.gitkeep
+experiments/centers/*
+!experiments/centers/.gitkeep
 
 # Legacy flat checkpoint folder from older layout
 checkpoints/

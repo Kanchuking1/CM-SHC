@@ -8,7 +8,8 @@ SOCK="/tmp/scp-cm-shc-$$"
 # Open a persistent SSH connection (authenticates once)
 ssh -fNM -S "$SOCK" "$REMOTE"
 
-scp -r -o "ControlPath=$SOCK" "$REMOTE:$REMOTE_BASE/checkpoints/alexnet_mlp_dcmh_mirflickr25k_128bit" ./experiments/checkpoints/
+scp -r -o "ControlPath=$SOCK" "$REMOTE:$REMOTE_BASE/checkpoints" ./experiments/
+scp -r -o "ControlPath=$SOCK" "$REMOTE:$REMOTE_BASE/centers" ./experiments/
 scp -r -o "ControlPath=$SOCK" "$REMOTE:$REMOTE_BASE/results" ./experiments/
 
 # Close the persistent connection
