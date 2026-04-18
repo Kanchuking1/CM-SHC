@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import torch
 from omegaconf import OmegaConf
@@ -40,8 +41,18 @@ def _cfg_to_json_dict(cfg) -> dict:
     return OmegaConf.to_container(cfg, resolve=True)
 
 
-def _resolve_text_repo(backbone_text_field) -> str:
-    """Extract the HF repo id from a ``cfg.model.backbone.text`` field."""
+def resolve_text_repo(backbone_text_field) -> str:
+    """Extract the HF repo id from a ``cfg.model.backbone.text`` field.
+
+    Accepts the two supported forms:
+
+    * a plain string -- returned unchanged (legacy path, e.g.
+      ``huawei-noah/TinyBERT_General_4L_312D``);
+    * a mapping with a ``model_name`` key -- e.g. ``{name: clip,
+      model_name: openai/clip-vit-base-patch32, ...}``.
+
+    Returns an empty string when the field is absent or malformed.
+    """
     if backbone_text_field is None:
         return ""
     if isinstance(backbone_text_field, str):
@@ -55,8 +66,12 @@ def _resolve_text_repo(backbone_text_field) -> str:
     return str(backbone_text_field)
 
 
-def _text_backbone_name(backbone_text_field) -> str:
-    """Return the text backbone's registry name (or "" for plain strings)."""
+def text_backbone_name(backbone_text_field) -> str:
+    """Return the text backbone's registry ``name`` key (or empty string).
+
+    Plain-string backbone fields are legacy HF repo ids with no explicit
+    registry name, so they return ``""`` here.
+    """
     if backbone_text_field is None or isinstance(backbone_text_field, str):
         return ""
     try:
@@ -66,6 +81,63 @@ def _text_backbone_name(backbone_text_field) -> str:
     if isinstance(resolved, dict):
         return str(resolved.get("name", ""))
     return ""
+
+
+def resolve_text_backbone_spec(cfg) -> tuple[str, bool, bool]:
+    """Return ``(text_ref, hf_local_files_only, is_clip_text)`` for ``cfg``.
+
+    Handles the three tokenizer / encoder regimes that the pipelines care
+    about:
+
+    * MLP-on-BOW path (``text_feature_dim`` set) -- returns ``("", False,
+      False)``; no HF snapshot needed.
+    * Legacy string ``backbone.text`` -- resolved as an HF repo id.
+    * Dict ``backbone.text`` (e.g. CLIP) -- ``model_name`` is used as the
+      repo id and ``is_clip_text`` reflects the registry ``name`` key.
+
+    This is the single place evaluate / retrieve / train agree on how
+    the text backbone is configured.
+    """
+    tdim = cfg.model.text_feature_dim
+    if tdim is not None:
+        return "", False, False
+
+    backbone = cfg.model.get("backbone", None)
+    backbone_text_field = backbone.get("text", None) if backbone is not None else None
+    is_clip = text_backbone_name(backbone_text_field) == "clip"
+    repo = resolve_text_repo(backbone_text_field)
+    if not repo:
+        raise ValueError(
+            "Text backbone repo id is empty. Set cfg.model.backbone.text to either "
+            "a HF repo id (str) or a registry dict with a 'model_name' key."
+        )
+    cache_root = Path(cfg.paths.model_cache)
+    offline = local_files_only(cfg)
+    text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
+    return text_ref, hf_lfo, is_clip
+
+
+# Back-compat aliases (old private names; prefer the public forms above).
+_resolve_text_repo = resolve_text_repo
+_text_backbone_name = text_backbone_name
+
+
+def _backbone_field_repr(field) -> Any:
+    """JSON-serialisable summary of a backbone field for run metadata.
+
+    Plain strings stay as strings; OmegaConf DictConfigs are materialised
+    to plain dicts so ``json.dump`` does not fall back to ``str(...)`` and
+    produce an unreadable blob.
+    """
+    if field is None:
+        return None
+    if isinstance(field, str):
+        return field
+    try:
+        resolved = OmegaConf.to_container(field, resolve=True)
+    except Exception:
+        resolved = dict(field) if isinstance(field, dict) else None
+    return resolved if resolved is not None else str(field)
 
 
 def _backbone_field_to_cfg(field, hf_local_files_only: bool):
@@ -245,24 +317,7 @@ def main():
 
     tdim = cfg.model.text_feature_dim
     use_mlp_text = tdim is not None
-
-    backbone_text_field = (
-        cfg.model.backbone.get("text", None) if cfg.model.get("backbone", None) is not None else None
-    )
-    text_backbone_name = _text_backbone_name(backbone_text_field)
-    is_clip_text = text_backbone_name == "clip"
-
-    if use_mlp_text:
-        text_ref, hf_lfo = "", False
-    else:
-        offline = local_files_only(cfg)
-        repo = _resolve_text_repo(backbone_text_field)
-        if not repo:
-            raise ValueError(
-                "Text backbone repo id is empty.  Set cfg.model.backbone.text to either "
-                "a HF repo id (str) or a registry dict with a 'model_name' key."
-            )
-        text_ref, hf_lfo = resolve_pretrained_ref(repo, cache_root, offline)
+    text_ref, hf_lfo, is_clip_text = resolve_text_backbone_spec(cfg)
 
     run_dir = experiment_run_dir(cfg)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -393,8 +448,8 @@ def main():
         "experiment_name": str(cfg.experiment_name),
         "model": str(cfg.model.name),
         "dataset": str(cfg.dataset.name),
-        "image_backbone": str(cfg.model.backbone.image),
-        "text_backbone": str(cfg.model.backbone.text),
+        "image_backbone": _backbone_field_repr(cfg.model.backbone.image),
+        "text_backbone": _backbone_field_repr(cfg.model.backbone.text),
         "bit_dim": int(cfg.model.bit_dim),
         "config_path": str(Path(args.config).resolve()),
         "repo_root": str(repo_root()),
