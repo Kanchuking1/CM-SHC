@@ -1,4 +1,4 @@
-#\!/bin/bash
+#!/bin/bash
 #SBATCH --job-name=eval_dcmh_clip_frozen_mirflickr25k_128bit
 #SBATCH --output=experiments/logs/slurm_%j.out
 #SBATCH --error=experiments/logs/slurm_%j.err

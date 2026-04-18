@@ -1,4 +1,4 @@
-#\!/bin/bash
+#!/bin/bash
 #SBATCH --job-name=eval_cmshc_clip_lora_mirflickr25k_64bit
 #SBATCH --output=experiments/logs/slurm_%j.out
 #SBATCH --error=experiments/logs/slurm_%j.err
