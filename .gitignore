@@ -28,3 +28,7 @@ checkpoints/
 
 # Local pretrained snapshots (populate via src.pipelines.download_models)
 model_cache/
+
+# LaTeX report source + build artefacts (not versioned; local scratch).
+docs/report/
+docs/presentation/

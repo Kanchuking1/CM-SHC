@@ -18,7 +18,12 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from src.core.trainer import CMSHCTrainer, DCMHTrainer, count_parameters
+from src.core.trainer import (
+    CMSHCTrainer,
+    DCMHAnchoredTrainer,
+    DCMHTrainer,
+    count_parameters,
+)
 from src.data.collators import (
     build_train_labels_tensor,
     load_clip_tokenizer,
@@ -212,12 +217,14 @@ def build_model(cfg, text_ref: str, hf_local_files_only: bool):
     if text_cfg is not None:
         common["text_cfg"] = text_cfg
 
-    if name == "dcmh":
+    if name in ("dcmh", "dcmh_anchored"):
+        # "dcmh_anchored" reuses the DCMH architecture; only the trainer
+        # loss differs (CM-SHC center-BCE anchor added to the pair loss).
         return DCMH(**common)
     if name == "cm_shc":
         return CMSHC(**common)
     raise ValueError(
-        f"Unknown model.name={name!r}; expected 'dcmh' or 'cm_shc'."
+        f"Unknown model.name={name!r}; expected 'dcmh', 'dcmh_anchored', or 'cm_shc'."
     )
 
 
@@ -426,6 +433,30 @@ def main():
             lambda_quant=float(cfg.model.get("lambda_quant", 0.1)),
             lambda_cm=float(cfg.model.get("lambda_cm", 1.0)),
             lambda_bal=float(cfg.model.get("lambda_bal", 0.0)),
+            max_epoch=int(cfg.training.max_epochs),
+            lr_img=float(cfg.training.lr_img),
+            lr_txt=float(cfg.training.lr_txt),
+            **opt_kwargs,
+        )
+    elif model_name == "dcmh_anchored":
+        # Diagnostic: DCMH pair loss + CM-SHC center-BCE anchor.  Requires
+        # the same Stage-2 target-codes file that CM-SHC uses.
+        T_train = _load_cmshc_targets(cfg, num_train=len(train_ds), bit_dim=int(cfg.model.bit_dim))
+        logger.info(
+            "Loaded anchor targets %s from %s (lambda_center=%.4f)",
+            tuple(T_train.shape),
+            _resolve_centers_path(cfg),
+            float(cfg.model.get("lambda_center", 0.1)),
+        )
+        trainer = DCMHAnchoredTrainer(
+            model=model,
+            train_loader=loader,
+            train_labels=train_labels,
+            target_codes=T_train,
+            device=device,
+            gamma=float(cfg.model.gamma),
+            eta=float(cfg.model.eta),
+            lambda_center=float(cfg.model.get("lambda_center", 0.1)),
             max_epoch=int(cfg.training.max_epochs),
             lr_img=float(cfg.training.lr_img),
             lr_txt=float(cfg.training.lr_txt),
