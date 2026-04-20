@@ -443,10 +443,11 @@ def main():
         # the same Stage-2 target-codes file that CM-SHC uses.
         T_train = _load_cmshc_targets(cfg, num_train=len(train_ds), bit_dim=int(cfg.model.bit_dim))
         logger.info(
-            "Loaded anchor targets %s from %s (lambda_center=%.4f)",
+            "Loaded anchor targets %s from %s (lambda_center=%.4f lambda_pair=%.4f)",
             tuple(T_train.shape),
             _resolve_centers_path(cfg),
             float(cfg.model.get("lambda_center", 0.1)),
+            float(cfg.model.get("lambda_pair", 1.0)),
         )
         trainer = DCMHAnchoredTrainer(
             model=model,
@@ -457,6 +458,7 @@ def main():
             gamma=float(cfg.model.gamma),
             eta=float(cfg.model.eta),
             lambda_center=float(cfg.model.get("lambda_center", 0.1)),
+            lambda_pair=float(cfg.model.get("lambda_pair", 1.0)),
             max_epoch=int(cfg.training.max_epochs),
             lr_img=float(cfg.training.lr_img),
             lr_txt=float(cfg.training.lr_txt),

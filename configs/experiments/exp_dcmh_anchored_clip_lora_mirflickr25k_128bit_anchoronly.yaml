@@ -1,0 +1,32 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k, CLIP ViT-B/32 + LoRA.
+#
+# **Anchor-only diagnostic**: zeroes the DCMH pair log-likelihood term
+# while keeping quant / balance regularisers and the center-BCE anchor.
+# Effectively this turns the trainer into "CM-SHC minus the explicit
+# cross-modal similarity term, driven by DCMH's alternating F/G/B
+# optimisation."
+#
+# Purpose: test the hypothesis that DCMH's pair loss is what disrupts
+# LoRA adapter training.  If MAP with λ_pair=0, λ_center=1 jumps back
+# toward CM-SHC's 0.808 (from the 0.706 anchored baseline), the pair
+# term is the disruptor and CM-SHC's advantage is "no competing pair
+# loss," not "supervised hash centers" per se.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  lambda_center: 1.0
+  lambda_pair: 0.0
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit_anchoronly
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

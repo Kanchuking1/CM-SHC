@@ -1,0 +1,24 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k, CLIP ViT-B/32 + LoRA.
+#
+# λ-sweep follow-up.  λ=3.0 over-weights the anchor so that pair/quant/
+# balance become a perturbation on a predominantly center-BCE loss.  If
+# the sweep is monotone (MAP rises with λ), this will be the peak; if
+# MAP has already saturated by λ=1.0 or is flat, this shows the ceiling.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  lambda_center: 3.0
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit_lc30
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

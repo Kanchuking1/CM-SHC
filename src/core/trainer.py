@@ -727,6 +727,7 @@ class DCMHAnchoredTrainer(DCMHTrainer):
         gamma: float = 1.0,
         eta: float = 1.0,
         lambda_center: float = 0.1,
+        lambda_pair: float = 1.0,
         max_epoch: int = 500,
         lr_img = None,
         lr_txt = None,
@@ -761,6 +762,10 @@ class DCMHAnchoredTrainer(DCMHTrainer):
             )
         self.T = target_codes.to(self.device).float()
         self.lambda_center = float(lambda_center)
+        # Scales the DCMH pair log-likelihood term only; quant/balance keep
+        # their existing gamma/eta weights.  Setting ``lambda_pair=0`` turns
+        # the trainer into "anchor + quant + balance" (no cross-pair loss).
+        self.lambda_pair = float(lambda_pair)
 
     def train_epoch(self):
         self.model.train()
@@ -801,7 +806,7 @@ class DCMHAnchoredTrainer(DCMHTrainer):
             nll_scaled = logloss / (self.num_train * self.batch_size)
             quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
             bal_scaled = self.eta * bal / (self.num_train * self.bit)
-            dcmh_loss = nll_scaled + quant_scaled + bal_scaled
+            dcmh_loss = self.lambda_pair * nll_scaled + quant_scaled + bal_scaled
 
             target_f = self.T.index_select(0, ind_t)
             anchor = central_bce_loss(cur_f, target_f)
@@ -853,7 +858,7 @@ class DCMHAnchoredTrainer(DCMHTrainer):
             nll_scaled = logloss / (self.num_train * self.batch_size)
             quant_scaled = self.gamma * quant / (self.batch_size * self.bit)
             bal_scaled = self.eta * bal / (self.num_train * self.bit)
-            dcmh_loss = nll_scaled + quant_scaled + bal_scaled
+            dcmh_loss = self.lambda_pair * nll_scaled + quant_scaled + bal_scaled
 
             target_g = self.T.index_select(0, ind_t)
             anchor = central_bce_loss(cur_g, target_g)
@@ -889,7 +894,7 @@ class DCMHAnchoredTrainer(DCMHTrainer):
             "F_buffer": self.F_buffer.detach().cpu(),
             "G_buffer": self.G_buffer.detach().cpu(),
             "B": self.B.detach().cpu(),
-            "lambdas": {"center": self.lambda_center},
+            "lambdas": {"center": self.lambda_center, "pair": self.lambda_pair},
         }
         if meta:
             payload["meta"] = meta
