@@ -1,5 +1,11 @@
 dataset:
   name: mirflickr25k
-  root: data/raw/mirflickr25k
-  # Extend src/data/loaders.py + preprocessing when wired
-  split_file: null
+  # Absolute path on the TAMU cluster; override in experiment YAML or set
+  # env var MIRFLICKR_ROOT for local dev (e.g. ../../Datasets/mirflickr).
+  root: /scratch/user/wahibkapdi/datasets/mirflickr
+  # root: ../../Datasets/mirflickr
+  num_classes: 24
+  caption_max_length: 64
+  split:
+    query_size: 2000
+    train_size: 10000

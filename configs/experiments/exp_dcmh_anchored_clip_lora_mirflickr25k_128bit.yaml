@@ -1,0 +1,30 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k with CLIP ViT-B/32 + LoRA.
+#
+# Diagnostic experiment: DCMH pair / quant / balance loss + CM-SHC
+# center-BCE anchor term (weighted by lambda_center).  Uses the same
+# classifier-derived centers file that the flagship CM-SHC CLIP+LoRA
+# run relies on, so the anchor targets are directly comparable.
+#
+# Goal: isolate whether hash-center supervision is the reason CM-SHC
+# absorbs LoRA adapters while plain DCMH regresses.  If anchored DCMH
+# recovers mean MAP toward CM-SHC's 0.808, the thesis holds.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  # Anchor weight.  0.1 is conservative; try 0.3 / 0.5 if the first
+  # run does not show a clear signal.
+  lambda_center: 0.1
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

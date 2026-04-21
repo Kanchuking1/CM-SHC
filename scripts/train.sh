@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")/.."
-python -m src.pipelines.train --config "${CONFIG:-configs/experiments/exp_dcmh_flickr8k.yaml}" "$@"
+
+sbatch ./scripts/slurm/cmshc_mirflickr25k_64bit.sbatch
+sbatch ./scripts/slurm/cmshc_mirflickr25k_128bit_nocm.sbatch
+sbatch ./scripts/slurm/cmshc_mirflickr25k_128bit.sbatch
+sbatch ./scripts/slurm/cmshc_mirflickr25k_128bit_csq.sbatch
+sbatch ./scripts/slurm/cmshc_mirflickr25k_128bit_cooc.sbatch

@@ -2,6 +2,12 @@
 seed: 42
 device: cuda
 
+paths:
+  # Relative to repo root; holds HF snapshots and TORCH_HOME for torchvision weights.
+  model_cache: model_cache
+  # If true, load HF/tokenizers with local_files_only (HPC / no Hub access).
+  offline_mode: true
+
 output:
   root: experiments
   checkpoints: checkpoints
@@ -13,6 +19,15 @@ training:
   num_workers: 4
   save_every: 1
   max_epochs: 500
+  # If true, resume from latest epoch_*.pt under the experiment run dir when present.
+  resume: true
   # 10**(-1.5) ≈ 0.0316
   lr_img: 0.0316
   lr_txt: 0.0316
+  # Optimizer settings.  DCMH / CM-SHC paper configs use SGD; CLIP + LoRA
+  # runs flip this to 'adamw' with a small weight_decay.
+  optimizer: sgd
+  weight_decay: 0.0
+  momentum: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

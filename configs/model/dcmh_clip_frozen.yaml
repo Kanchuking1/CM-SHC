@@ -1,0 +1,31 @@
+# DCMH with frozen CLIP vision + text towers as backbones.
+#
+# * Both CLIP towers are wrapped by the registry-form backbone dict
+#   (see src/models/backbones/__init__.py); each exposes only the
+#   linear projection head (self.proj) as trainable.
+# * The raw-text pipeline feeds tokenized captions built from
+#   MIR-Flickr-25k tag lists (see src/data/loaders.py:_build_prompts).
+# * Set ``text_feature_dim: null`` so train.py takes the transformer path.
+model:
+  name: dcmh
+  bit_dim: 64
+  gamma: 1.0
+  eta: 1.0
+
+  # Transformer text path (legacy flag kept for back-compat; the actual
+  # freeze is controlled by backbone.text.freeze below).
+  text_feature_dim: null
+  freeze_text_encoder: true
+
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      renormalize: true
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto

@@ -1,0 +1,9 @@
+# DCMH on MIR-Flickr-25k (merges base + dcmh model + mirflickr25k dataset + overrides below).
+model: dcmh
+dataset: mirflickr25k
+
+experiment_name: alexnet_mlp
+
+training:
+  max_epochs: 500
+  batch_size: 64

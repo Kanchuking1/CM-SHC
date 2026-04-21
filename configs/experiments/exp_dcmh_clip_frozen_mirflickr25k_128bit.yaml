@@ -1,0 +1,25 @@
+# DCMH @ 128 bits on MIR-Flickr-25k with FROZEN CLIP ViT-B/32 towers.
+#
+# Only the two hash-head linear layers (self.proj on each tower) are
+# trainable.  Uses AdamW with a small learning rate since the trainable
+# parameter count is very small (~ out_dim * 512 * 2 ≈ 130k weights).
+#
+# Before the first run, prime CLIP weights into ``model_cache``:
+#   python -m src.pipelines.download_models --config <this file>
+model:
+  name: dcmh_clip_frozen
+  bit_dim: 128
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_clip_frozen_mirflickr25k_128bit
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 1.0e-4
+  lr_txt: 1.0e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

@@ -1,0 +1,14 @@
+# CM-SHC @ 128 bits on MIR-Flickr-25k, ablation: CSQ Hadamard centers
+# (Yuan et al., CVPR 2020) -- data-agnostic, no S, no solver.
+model:
+  name: cm_shc
+  bit_dim: 128
+  similarity_method: csq
+
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_128bit_csq
+
+training:
+  max_epochs: 200
+  batch_size: 64

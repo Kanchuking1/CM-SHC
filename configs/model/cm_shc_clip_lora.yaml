@@ -1,0 +1,44 @@
+# CM-SHC with CLIP + LoRA on both vision and text towers.
+#
+# Joint-loss mixture is inherited from configs/model/cm_shc.yaml defaults
+# (lambda_center / lambda_quant / lambda_cm / lambda_bal).
+model:
+  name: cm_shc
+  bit_dim: 128
+
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      renormalize: true
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
+
+  text_feature_dim: null
+  freeze_text_encoder: true
+
+  # --- CM-SHC specific hyperparameters -------------------------------------
+  similarity_method: cooccurrence
+  centers_path: null
+  mu: 1.0
+  lambda_center: 1.0
+  lambda_quant: 0.1
+  lambda_cm: 1.0
+  lambda_bal: 0.0

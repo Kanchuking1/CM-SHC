@@ -1,0 +1,30 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k, CLIP ViT-B/32 + LoRA.
+#
+# **High-balance diagnostic**: keep the DCMH pair loss and the λ=0.1
+# anchor, but crank the balance regulariser weight η from 1.0 to 1000.0.
+#
+# Motivation: at the baseline (lc01) the balance loss converged to 603k
+# while CM-SHC+LoRA's converged to exactly 0.0.  We want to test whether
+# forcing DCMH's per-bit activation toward uniform (CM-SHC's operating
+# point) closes the gap.  If MAP rises materially, "balance under LoRA"
+# is a critical piece of CM-SHC's advantage that DCMH's weak η=1 setting
+# fails to enforce.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  eta: 1000.0
+  lambda_center: 0.1
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit_hibal
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

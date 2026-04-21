@@ -3,6 +3,7 @@ torch>=2.0.0
 torchvision>=0.15.0
 
 omegaconf>=2.3.0
+huggingface_hub>=0.20.0
 transformers>=4.30.0
 # Fast tokenizers: Rust runtime (often pulled in by transformers; pin for clarity)
 tokenizers>=0.13.0
@@ -12,3 +13,8 @@ tqdm>=4.65.0
 numpy>=1.24.0
 pandas>=2.0.0
 Pillow>=9.5.0
+matplotlib>=3.7.0
+# Parameter-efficient fine-tuning (LoRA adapters for CLIP).  Only loaded
+# lazily when a backbone config specifies a ``lora:`` sub-dict; frozen
+# / non-CLIP runs do not need this at all.
+peft>=0.8.0

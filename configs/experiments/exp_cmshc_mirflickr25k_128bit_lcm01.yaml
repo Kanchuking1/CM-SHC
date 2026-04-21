@@ -1,0 +1,15 @@
+# CM-SHC @ 128 bits on MIR-Flickr-25k, lambda_cm sweep: lambda_cm = 0.1.
+# Part of the cross-modal regularization weight study.
+model:
+  name: cm_shc
+  bit_dim: 128
+  similarity_method: classifier
+  lambda_cm: 0.1
+
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_128bit_lcm01
+
+training:
+  max_epochs: 100
+  batch_size: 64

@@ -1,0 +1,20 @@
+# CM-SHC on MIR-Flickr-25k @ 64 bits with S-cooc centers.
+# Cheapest end-to-end smoke test: no auxiliary classifier needed.
+#
+#   python -m src.pipelines.build_centers \
+#       --config configs/experiments/exp_cmshc_mirflickr25k_64bit_cooc.yaml \
+#       --method cooccurrence
+#   python -m src.pipelines.train \
+#       --config configs/experiments/exp_cmshc_mirflickr25k_64bit_cooc.yaml
+model:
+  name: cm_shc
+  bit_dim: 64
+  similarity_method: cooccurrence
+
+dataset: mirflickr25k
+
+experiment_name: cmshc_mirflickr25k_64bit_cooc
+
+training:
+  max_epochs: 50
+  batch_size: 64

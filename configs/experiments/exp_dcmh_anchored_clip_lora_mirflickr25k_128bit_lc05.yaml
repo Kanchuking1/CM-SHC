@@ -1,0 +1,24 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k, CLIP ViT-B/32 + LoRA.
+#
+# λ-sweep follow-up.  At λ=0.5 the anchor is roughly on par with the
+# DCMH pair term (DCMH total_scaled ≈ 1.3, anchor ≈ 0.75 * 0.5 = 0.38).
+# If the operative mechanism is "suppress pair loss with a strong
+# anchor," MAP should move noticeably upward here.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  lambda_center: 0.5
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit_lc05
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

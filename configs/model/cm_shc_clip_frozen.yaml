@@ -1,0 +1,32 @@
+# CM-SHC with frozen CLIP vision + text towers as backbones.
+#
+# Structurally identical to dcmh_clip_frozen except for the joint loss
+# (see src/models/losses/semantic_center_loss.py:cmshc_full_loss).
+model:
+  name: cm_shc
+  bit_dim: 128
+
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      renormalize: true
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+
+  text_feature_dim: null
+  freeze_text_encoder: true
+
+  # --- CM-SHC specific hyperparameters -------------------------------------
+  similarity_method: cooccurrence   # cooccurrence | classifier | csq
+  centers_path: null
+  mu: 1.0
+  lambda_center: 1.0
+  lambda_quant: 0.1
+  lambda_cm: 1.0
+  lambda_bal: 0.0

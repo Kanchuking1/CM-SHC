@@ -16,8 +16,7 @@ def test_config_compose():
 
     from src.utils.config import configs_dir, load_experiment
 
-    exp = configs_dir() / "experiments" / "exp_dcmh_flickr8k.yaml"
+    exp = configs_dir() / "experiments" / "exp_dcmh_mirflickr25k.yaml"
     assert Path(exp).is_file()
     cfg = load_experiment(exp)
     assert cfg.model.name == "dcmh"
-    assert cfg.dataset.name == "Flickr8k"

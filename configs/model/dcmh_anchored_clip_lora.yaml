@@ -1,0 +1,55 @@
+# Anchored DCMH on top of CLIP ViT-B/32 + LoRA adapters.
+#
+# Diagnostic variant that adds a CM-SHC-style center-BCE anchor to the
+# standard DCMH pair / quant / balance loss.  Architecturally identical
+# to `dcmh_clip_lora`; only the training loss differs.  Used to test
+# whether the hash-center supervision is what lets CM-SHC handle LoRA
+# while plain DCMH regresses.
+#
+# Requires the same Stage-2 target-codes file that CM-SHC uses; re-use
+# `experiments/centers/{dataset}_{similarity_method}_q{bit}.pt` from an
+# earlier CM-SHC run, or build it with `src.pipelines.build_centers`.
+model:
+  name: dcmh_anchored
+  bit_dim: 64
+  gamma: 1.0
+  eta: 1.0
+
+  # Similarity source for the class centers (must match the centers file
+  # that build_centers wrote; classifier is the CM-SHC default).
+  similarity_method: classifier
+
+  # Weight of the center-BCE anchor on top of the DCMH objective.  0.1
+  # is a conservative starting point: it's large enough to visibly
+  # shape the code geometry but small enough not to dominate the pair
+  # loss (DCMH total_scaled ≈ 1.3 at convergence, anchor BCE ≈ 0.5-0.8,
+  # so 0.1 * anchor ≈ 5-8% of total).  Override per experiment.
+  lambda_center: 0.1
+
+  text_feature_dim: null
+  freeze_text_encoder: true
+
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      renormalize: true
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none

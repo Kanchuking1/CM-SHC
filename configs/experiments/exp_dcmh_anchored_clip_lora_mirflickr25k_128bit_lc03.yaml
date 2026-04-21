@@ -1,0 +1,24 @@
+# Anchored DCMH @ 128 bits on MIR-Flickr-25k, CLIP ViT-B/32 + LoRA.
+#
+# λ-sweep follow-up to the base run (lambda_center=0.1 -> 0.706 mean MAP).
+# At λ=0.3 the anchor is ~15-20 % of the DCMH total: still not dominant,
+# but strong enough to meaningfully compete with the pair gradient.  If
+# MAP climbs versus the 0.1 run, the anchor weight itself is the knob.
+model:
+  name: dcmh_anchored_clip_lora
+  bit_dim: 128
+  lambda_center: 0.3
+
+dataset: mirflickr25k
+
+experiment_name: dcmh_anchored_clip_lora_mirflickr25k_128bit_lc03
+
+training:
+  max_epochs: 200
+  batch_size: 64
+  optimizer: adamw
+  lr_img: 5.0e-5
+  lr_txt: 5.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8

@@ -1,0 +1,40 @@
+# DCMH on top of CLIP vision + text towers with LoRA adapters.
+#
+# * Base CLIP weights stay frozen; only the LoRA adapter weights
+#   (inserted on q/k/v attention projections) and the hash-head
+#   linear projections are trainable.
+# * Pairs well with an AdamW optimizer and a small learning rate
+#   (see configs/experiments/exp_dcmh_clip_lora_mirflickr25k_128bit.yaml).
+model:
+  name: dcmh
+  bit_dim: 64
+  gamma: 1.0
+  eta: 1.0
+
+  text_feature_dim: null
+  freeze_text_encoder: true
+
+  backbone:
+    image:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      renormalize: true
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
+    text:
+      name: clip
+      model_name: openai/clip-vit-base-patch32
+      freeze: true
+      local_files_only: auto
+      lora:
+        r: 8
+        lora_alpha: 16
+        lora_dropout: 0.05
+        target_modules: [q_proj, k_proj, v_proj]
+        bias: none
