@@ -14,11 +14,13 @@ trap close_master EXIT INT TERM
 # Open a persistent SSH connection (authenticates once)
 ssh -fNM -S "$SOCK" "$REMOTE"
 
-RSYNC=(rsync -a --ignore-existing -e "ssh -S $SOCK")
+# SCP from remote to local folders
+# ./experiments/checkpoints
+# ./experiments/results
+# ./experiments/centers
 
-# Sync each tree; --ignore-existing skips files already present locally (no overwrite)
-"${RSYNC[@]}" "$REMOTE:$REMOTE_BASE/checkpoints/" ./experiments/checkpoints/
-"${RSYNC[@]}" "$REMOTE:$REMOTE_BASE/centers/" ./experiments/centers/
-"${RSYNC[@]}" "$REMOTE:$REMOTE_BASE/results/" ./experiments/results/
+scp -o ControlPath="$SOCK" -r "$REMOTE:$REMOTE_BASE/checkpoints" ./experiments/
+scp -o ControlPath="$SOCK" -r "$REMOTE:$REMOTE_BASE/results" ./experiments/
+scp -o ControlPath="$SOCK" -r "$REMOTE:$REMOTE_BASE/centers" ./experiments/
 
 close_master

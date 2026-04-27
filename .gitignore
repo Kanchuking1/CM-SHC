@@ -32,3 +32,7 @@ model_cache/
 # LaTeX report source + build artefacts (not versioned; local scratch).
 docs/report/
 docs/presentation/
+
+# Hugging Face Hub cache (if used for model caching)
+huggingface_cache/
+.hf_staging/
