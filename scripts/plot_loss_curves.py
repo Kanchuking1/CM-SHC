@@ -81,7 +81,7 @@ PRESETS: Dict[str, Dict[str, List[Tuple[str, str]]]] = {
         "title": "DCMH training loss curves (MIR-Flickr-25k, 128 bits)",
         "output": "experiments/results/loss_dcmh_overlay.png",
         "runs": [
-            ("AlexNet+BoW", "alexnet_mlp_dcmh_mirflickr25k_128bit/loss_history.json"),
+            # ("AlexNet+BoW", "alexnet_mlp_dcmh_mirflickr25k_128bit/loss_history.json"),
             (
                 "CLIP frozen",
                 "dcmh_clip_frozen_mirflickr25k_128bit_dcmh_mirflickr25k_128bit/loss_history.json",
